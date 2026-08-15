@@ -13,7 +13,7 @@ const LS_DEVICE = 'dshm_device';
 const LS_BASE = 'dshm_base';
 const LS_DEVICE_ID = 'dshm_device_id';
 const LS_CACHE = 'dshm_cache'; // 会话消息缓存 {sessionId: {msgs, ts}}
-const APP_VERSION = '1.8';
+const APP_VERSION = '0.0.1';
 
 /** 持久设备标识：同一台手机重新配对时服务端据此识别为同一设备。 */
 function deviceId() {
