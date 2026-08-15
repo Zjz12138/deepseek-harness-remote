@@ -85,6 +85,20 @@ gradle-8.14.3\bin\gradle.bat -p android assembleDebug
 
 目录结构：`main.js`（Electron 主进程）、`mobile.js`（手机访问服务）、`mobile-api.js`（dsh RPC 客户端）、`mobile-ui/`（手机 App 界面）、`apk/`（Capacitor Android 工程）、`tunnel.js`（Cloudflare 隧道）。
 
+### 已知修复补丁（dsh 上游 bug）
+
+`npm install` 后会自动运行 `apply-dsh-picker-fix.js`，修复
+`@deepseek-ai/dsh-host-directory-picker-native` 的目录选择崩溃：
+
+- **现象**：桌面端新建会话选择文件夹时，worker 进程以原生访问违规崩溃
+  （`win32 folder dialog worker exited before reporting a result`），
+  控制台/日志出现 `napi_fatal_error`。
+- **根因**：dsh 的 `worker.cjs` 用 `koffi.view(address, 32768)` 盲读 32KB 取路径；
+  短路径的 `CoTaskMemAlloc` 块很小，越界读入未提交页即崩溃。
+  `koffi.decode(addr, 'str16')` 也会崩溃（解引用指针）。
+- **修复**：改用官方安全 API `koffi.decode.string16(addr)`
+  （NUL 终止 UTF-16 安全解码，不超读分配）。
+
 ---
 
 ## ⚠️ 免责声明
