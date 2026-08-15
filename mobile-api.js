@@ -257,6 +257,32 @@ function contentText(blocks) {
     .trim();
 }
 
+/**
+ * 把工具调用折叠成手机端友好标题：
+ * - 压缩/解压类命令 → “压缩命令”（长耗时命令，手机端只显示动作名，不刷输出）；
+ * - bash/pwsh 等命令执行类工具 → 显示去掉多余空白后的简短命令文本；
+ * - 其他工具 → 返回空串，前端回退显示工具名 + 参数预览。
+ */
+function friendlyToolLabel(name, argsText) {
+  const hay = (String(name) + ' ' + String(argsText || '')).toLowerCase();
+  if (/\b(compress|decompress|unzip|zip|7z|tar|rar|gzip|archive)\b/.test(hay) || /压缩|解压/.test(hay)) {
+    return '压缩命令';
+  }
+  if (/^(bash|pwsh|powershell|cmd|sh|shell|terminal)$/i.test(String(name))) {
+    let cmd = '';
+    try {
+      const parsed = JSON.parse(argsText || '{}');
+      cmd = parsed.command || parsed.script || parsed.line || '';
+    } catch {}
+    if (cmd) {
+      const one = String(cmd).replace(/\s+/g, ' ').trim();
+      return one.length > 40 ? one.slice(0, 40) + '…' : one;
+    }
+    return '执行命令';
+  }
+  return '';
+}
+
 function foldHistory(entries) {
   const out = [];
   let lastTool = null;
@@ -285,7 +311,8 @@ function foldHistory(entries) {
       const name = d.name || (d.call && d.call.name) || 'tool';
       const rawArgs = d.arguments !== undefined ? d.arguments : d.call && d.call.args;
       const args = typeof rawArgs === 'string' ? rawArgs.slice(0, 240) : safeJson(rawArgs);
-      out.push({ kind: 'tool', name, args, status: 'running', time: event.time, seq: event.seq });
+      const label = friendlyToolLabel(name, args);
+      out.push({ kind: 'tool', name, label, args, status: 'running', time: event.time, seq: event.seq });
       lastTool = out[out.length - 1];
     } else if (t === 'tool/result' && lastTool) {
       lastTool.status = 'done';

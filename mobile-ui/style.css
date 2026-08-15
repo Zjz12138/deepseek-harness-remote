@@ -183,6 +183,15 @@ button.danger {
 }
 .tool-line .t-name { color: #9fd0ff; }
 .tool-line.done { opacity: 0.75; }
+.tool-line .t-icon { font-style: normal; }
+.msg-expand {
+  align-self: flex-start;
+  margin-top: 6px; margin-left: 13px;
+  font-size: 12px; color: var(--accent);
+  background: none; border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 12px; cursor: pointer;
+}
+.msg-expand:active { opacity: 0.7; }
 .composer {
   flex: none; display: flex; gap: 8px; align-items: flex-end;
   padding: 10px 12px calc(10px + var(--safe-b));

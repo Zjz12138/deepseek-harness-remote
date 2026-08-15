@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win",
-    "postinstall": "node apply-dsh-picker-fix.js"
+    "postinstall": "node apply-dsh-picker-fix.js && node apply-dsh-ui-patches.js"
   },
   "devDependencies": {
     "electron": "^43.4.0",

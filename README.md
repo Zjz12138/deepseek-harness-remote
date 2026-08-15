@@ -9,16 +9,16 @@
 
 ## 📥 下载（Release 页面）
 
-到本仓库右侧 **Releases** 最新版下载（Windows 10/11 x64）：
+到本仓库右侧 **Releases** 最新版（v0.0.1）下载，只有两个文件，平台不通用：
 
-| 文件 | 用途 |
-| --- | --- |
-| `DeepSeek Harness Setup 1.8.0.exe` | 电脑端**安装包**，双击安装，自动创建桌面快捷方式 |
-| `DeepSeek-Harness-1.8.0-portable.exe` | 电脑端**便携版**，免安装，解压/复制到任意目录双击即用 |
-| `DeepSeek-Harness-mobile.apk` | 手机端 App（约 32MB），传到手机安装 |
+| 文件 | 支持平台 | 用途 |
+| --- | --- | --- |
+| `DeepSeek-Harness-0.0.1-Setup.exe` | **仅 Windows**（Win10/11 x64） | 电脑端**安装包**，双击安装，自动创建桌面快捷方式 |
+| `DeepSeek-Harness-0.0.1-mobile.apk` | **仅 Android**（无需 Google 服务） | 手机端 App（约 32MB），传到手机安装 |
 
+> ⚠️ `.exe` 只能装到 Windows 电脑，`.apk` 只能装到安卓手机，两者不能互换使用。
 > 电脑端已**内置 dsh 服务与所有依赖**（含 Cloudflare 隧道组件），无需安装 Node.js 或任何其它软件。
-> 安装包较大（约 150MB）是因为自带了完整的运行环境，保证开箱即用。
+> 安装包较大（约 140MB）是因为自带了完整的运行环境，保证开箱即用。
 
 ---
 
@@ -46,8 +46,14 @@
   - 会话列表 / 聊天 / 新建会话（可选工作区）/ 设置
   - 打开会话只加载最新 **200 条**，上翻到顶分批加载更早历史
   - 斜杠命令（`/permission` 权限模式、`/preset` Agent 预设、`/stop` 停止等，与桌面端同一数据源）
+  - 执行命令时显示友好动作名（如“正在执行压缩命令…”），不再直接刷屏输出；
+    超长回复自动折叠，点“展开全部”查看
   - 支持显示思考过程（reasoning）、工具调用、系统消息（灰色）与用户输入（蓝色）区分
   - 离线自动重连（网络恢复无需重新扫码）、“回到最新”悬浮按钮、返回手势
+
+- **安装体验**
+  - 安装进度条为平滑动画，详情区显示正在解压的文件与真实百分比（不再“填满后冻结/跳回”）
+  - 首次启动稍慢属正常（内置完整 dsh 运行环境）
 
 - **安全模型**
   - 扫码配对 + 电脑端确认；每台设备独立 256 位令牌（电脑只存哈希，可单独吊销）
@@ -87,17 +93,25 @@ gradle-8.14.3\bin\gradle.bat -p android assembleDebug
 
 ### 已知修复补丁（dsh 上游 bug）
 
-`npm install` 后会自动运行 `apply-dsh-picker-fix.js`，修复
-`@deepseek-ai/dsh-host-directory-picker-native` 的目录选择崩溃：
+`npm install` 后会自动运行 3 个补丁脚本：
 
-- **现象**：桌面端新建会话选择文件夹时，worker 进程以原生访问违规崩溃
-  （`win32 folder dialog worker exited before reporting a result`），
-  控制台/日志出现 `napi_fatal_error`。
-- **根因**：dsh 的 `worker.cjs` 用 `koffi.view(address, 32768)` 盲读 32KB 取路径；
-  短路径的 `CoTaskMemAlloc` 块很小，越界读入未提交页即崩溃。
-  `koffi.decode(addr, 'str16')` 也会崩溃（解引用指针）。
-- **修复**：改用官方安全 API `koffi.decode.string16(addr)`
-  （NUL 终止 UTF-16 安全解码，不超读分配）。
+1. **`apply-dsh-picker-fix.js`** — 修复 `@deepseek-ai/dsh-host-directory-picker-native`
+   的目录选择崩溃：
+   - **现象**：桌面端新建会话选择文件夹时，worker 进程以原生访问违规崩溃
+     （`win32 folder dialog worker exited before reporting a result`），
+     控制台/日志出现 `napi_fatal_error`。
+   - **根因**：dsh 的 `worker.cjs` 用 `koffi.view(address, 32768)` 盲读 32KB 取路径；
+     短路径的 `CoTaskMemAlloc` 块很小，越界读入未提交页即崩溃。
+     `koffi.decode(addr, 'str16')` 也会崩溃（解引用指针）。
+   - **修复**：改用官方安全 API `koffi.decode.string16(addr)`
+     （NUL 终止 UTF-16 安全解码，不超读分配）。
+
+2. **`apply-dsh-ui-patches.js`** — 给 `dsh-client-ui-workspace` 会话菜单加
+   **“打开会话目录”**（与重命名/分叉/归档同级，用系统资源管理器打开该会话的目录）。
+
+3. **`apply-nsis-patches.js`** — 安装器进度体验：
+   进度条切换为平滑跑马灯动画，详情区按真实字节进度输出“正在解压应用文件：x%”，
+   并显示每个正在写入的文件（修复进度条“快速填满→冻结→跳回”的假进度）。
 
 ---
 

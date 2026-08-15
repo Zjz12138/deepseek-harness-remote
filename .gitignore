@@ -1,6 +1,7 @@
 # --- Node ---
 node_modules/
 release/
+release-new/
 dist/
 
 # --- 运行时生成 / 用户数据（绝不入库） ---

@@ -839,6 +839,11 @@ function mergeMessages(older, newer) {
   return [...bySeq.values()].sort((a, b) => (a.seq || 0) - (b.seq || 0));
 }
 
+/** 已展开的长消息（按 seq 记忆，避免每次轮询重渲染后又收回去）。 */
+const expandedLongMsgs = new Set();
+
+const LONG_MSG_LIMIT = 480; // 超过该长度的 assistant 文本默认折叠，点“展开全部”查看
+
 function renderMessages(messages, opts = {}) {
   const box = $('messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -872,14 +877,32 @@ function renderMessages(messages, opts = {}) {
         const rText = m.reasoning === '…' ? '思考中…' : m.reasoning.slice(0, 40);
         parts.push('<div class="reason">🧠 ' + esc(rText) + '</div>');
       }
-      if (hasText) parts.push(`<div class="bubble">${esc(m.text)}</div>`);
+      if (hasText) {
+        const full = m.text;
+        const seqKey = m.seq !== undefined ? m.seq : (m.time || '');
+        if (full.length > LONG_MSG_LIMIT && !expandedLongMsgs.has(seqKey)) {
+          // 长输出（如压缩命令的完整结果）默认折叠，避免刷屏；点击可展开
+          parts.push(
+            `<div class="bubble">${esc(full.slice(0, LONG_MSG_LIMIT))}…</div>` +
+            `<button type="button" class="msg-expand" data-seq="${esc(String(seqKey))}">展开全部（${full.length} 字）</button>`
+          );
+        } else {
+          parts.push(`<div class="bubble">${esc(full)}</div>`);
+        }
+      }
       div.innerHTML = parts.join('');
       box.appendChild(div);
     } else if (m.kind === 'tool') {
       const div = document.createElement('div');
-      div.className = 'tool-line' + (m.status === 'done' ? ' done' : '');
-      const argPreview = m.args ? m.args.slice(0, 80) : '';
-      div.innerHTML = `<span class="t-name">🔧 ${esc(m.name)}</span> ${esc(argPreview)}`;
+      const done = m.status === 'done';
+      div.className = 'tool-line' + (done ? ' done' : '');
+      if (m.label) {
+        // 命令类工具：显示友好动作名（如“压缩命令”），不直接展示原始参数/输出
+        div.innerHTML = `<span class="t-icon">${done ? '✅' : '⏳'}</span> <span class="t-name">${esc(m.label)}</span>${done ? ' 完成' : ' 执行中…'}`;
+      } else {
+        const argPreview = m.args ? m.args.slice(0, 80) : '';
+        div.innerHTML = `<span class="t-name">🔧 ${esc(m.name)}</span> ${esc(argPreview)}`;
+      }
       box.appendChild(div);
     }
   }
@@ -890,6 +913,15 @@ function renderMessages(messages, opts = {}) {
   }
   updateScrollBottom();
 }
+
+// 展开长消息（事件委托：消息列表会反复重渲染）
+$('messages').addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest && e.target.closest('.msg-expand');
+  if (!btn) return;
+  const seq = btn.dataset.seq;
+  if (seq !== undefined) expandedLongMsgs.add(seq);
+  renderMessages(chatMsgs);
+});
 
 /** 上翻到顶时加载更早的历史（每次 200 条消息）。 */
 async function loadMoreHistory() {

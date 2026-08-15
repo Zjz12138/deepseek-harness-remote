@@ -893,6 +893,13 @@ function createWindow() {
     } else if (action === 'close') mainWindow.close();
   });
 
+  // 会话三点菜单“打开会话目录”（preload.js 收到页面事件后转发）：
+  // 用系统资源管理器打开该会话的工作目录。
+  ipcMain.on('open-session-dir', (_event, path) => {
+    if (typeof path !== 'string' || !path.trim()) return;
+    shell.openPath(path.trim()).catch(() => {});
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url);
     return { action: 'deny' };
@@ -977,7 +984,6 @@ const FONTS = [
  * opened from the custom title bar buttons. */
 function menuTemplates() {
   const fileMenu = [
-    { label: '打开工作目录', click: () => shell.openPath(WORKSPACE_DIR) },
     { label: '在系统浏览器中打开', click: () => shell.openExternal(WEB_URL) },
     { type: 'separator' },
     { label: '后台运行（隐藏到托盘）', click: () => mainWindow && mainWindow.hide() },

@@ -200,3 +200,15 @@ function ensureSidebarButton() {
 
 // 侧边栏由 React 渲染，可能重绘；定时兜底 + 上面 body 观察器共同保证注入
 setInterval(ensureSidebarButton, 2000);
+
+// ---------------------------------------------------------------------------
+// 4. 会话三点菜单“打开会话目录”
+//    dsh web UI（dsh-client-ui-workspace）在会话菜单里派发自定义事件
+//    `dsh-open-session-dir`（detail.path = 会话工作目录）；这里转发给主进程，
+//    由主进程用系统资源管理器打开。浏览器（非桌面壳）里没有监听者，静默忽略。
+// ---------------------------------------------------------------------------
+
+window.addEventListener('dsh-open-session-dir', (event) => {
+  const path = event && event.detail && typeof event.detail.path === 'string' ? event.detail.path : '';
+  if (path) ipcRenderer.send('open-session-dir', path);
+});
