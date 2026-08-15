@@ -295,9 +295,16 @@ function foldHistory(entries) {
       // 区分来源：dsh 会把插件/系统注入的消息（审批策略变化、运行时上下文快照等）也记录为
       // user/message（source.kind !== 'user'），这些不该显示成“用户输入”，标记为 system。
       const isRealUser = d.source && d.source.kind === 'user';
+      let text = contentText(d.content);
+      // 压缩上下文（/compact）落地的检查点消息是一大段
+      // “automatically generated checkpoint … <compacted-summary>…</compacted-summary>”，
+      // 手机上不需要倾倒全文，换成一句友好提示。
+      if (text.includes('<compacted-summary>') || /automatically generated checkpoint/i.test(text)) {
+        text = '✅ 上下文已压缩（历史已精简，对话可继续）';
+      }
       out.push({
         kind: isRealUser ? 'user' : 'system',
-        text: contentText(d.content),
+        text,
         time: event.time,
         seq: event.seq,
       });

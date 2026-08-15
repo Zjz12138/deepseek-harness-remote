@@ -29,6 +29,22 @@ if (!fs.existsSync(target)) {
 
 let src = fs.readFileSync(target, 'utf8');
 
+// Integrity: the file must contain the guidBytes helper and the constants it
+// depends on. A broken intermediate edit once dropped them, crashing the
+// worker at load ("guidBytes is not defined"). Refuse to continue silently.
+function checkIntegrity(text) {
+  const need = ['function guidBytes(text)', 'const COINIT_APARTMENTTHREADED', 'const CLSCTX_INPROC_SERVER', 'const SIGDN_FILESYSPATH'];
+  for (const s of need) {
+    if (!text.includes(s)) {
+      console.error('[dsh-picker-fix] 完整性检查失败：缺少片段 "' + s + '"（worker.cjs 可能被损坏）。');
+      console.error('            请从 npm 缓存原版恢复后重跑：');
+      console.error('            copy /y "<npx缓存>\\@deepseek-ai\\dsh-host-directory-picker-native\\lib\\worker.cjs" "' + target + '"');
+      process.exit(1);
+    }
+  }
+}
+checkIntegrity(src);
+
 // Already patched? (match only the function body, not the doc comment)
 if (/function readUtf16\(koffi, address\) \{\s*\/\/ Fixed:[\s\S]*?return koffi\.decode\.string16\(address\);/.test(src)) {
   console.log('[dsh-picker-fix] already applied, skipping.');
@@ -49,5 +65,6 @@ const newFn = `function readUtf16(koffi, address) {
 }`;
 
 src = src.replace(oldFn, newFn);
+checkIntegrity(src); // 打完后再查一次
 fs.writeFileSync(target, src, 'utf8');
 console.log('[dsh-picker-fix] worker.cjs patched (string16 safe decode).');

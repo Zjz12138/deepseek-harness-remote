@@ -911,6 +911,14 @@ function renderMessages(messages, opts = {}) {
   } else if (nearBottom) {
     box.scrollTop = box.scrollHeight;
   }
+  // 斜杠命令执行中（如 /compact 在电脑端压缩上下文）的临时提示
+  if (pendingCmd) {
+    const div = document.createElement('div');
+    div.className = 'msg system';
+    div.innerHTML = `<div class="sys-line">⏳ ${esc(pendingCmd.label)}…</div>`;
+    box.appendChild(div);
+    if (nearBottom) box.scrollTop = box.scrollHeight;
+  }
   updateScrollBottom();
 }
 
@@ -1146,14 +1154,33 @@ function runCommand(cmd) {
   else if (cmd.action === 'run') executeSlash(cmd.line);
 }
 
-/** 执行服务端斜杠命令（/compact /plan /goal…），与桌面端同一 RPC。 */
+/** 执行服务端斜杠命令（/compact /plan /goal…），与桌面端同一 RPC。
+ * 命令（如 /compact）会在电脑端阻塞执行较久，期间在聊天里显示“正在执行…”，
+ * 避免手机端看起来没反应。 */
+let pendingCmd = null; // { label }
+
+function showPendingCmd(label) {
+  pendingCmd = { label };
+  renderMessages(chatMsgs);
+}
+
+function clearPendingCmd() {
+  pendingCmd = null;
+  renderMessages(chatMsgs);
+}
+
 async function executeSlash(line) {
   if (!currentSessionId) return;
+  const cmdName = String(line || '').trim().split(/\s+/)[0] || '/command';
+  const label = /^\/compact$/i.test(cmdName) ? '正在压缩上下文' : `正在执行 ${cmdName}`;
+  showPendingCmd(label);
   try {
     const r = await api('/m/command', { method: 'POST', body: JSON.stringify({ sessionId: currentSessionId, line }) });
+    clearPendingCmd();
     if (r.text) toast(r.text.slice(0, 120));
     setTimeout(chatPoll, 300);
   } catch (e) {
+    clearPendingCmd();
     toast(e.message);
   }
 }
