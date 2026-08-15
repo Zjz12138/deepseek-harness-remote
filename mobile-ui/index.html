@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#0f1115" />
+<title>DeepSeek Harness</title>
+<link rel="icon" href="./icon-192.png" />
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!-- 认证 / 配对 -->
+  <section id="view-auth" class="view">
+    <div class="auth-card">
+      <div class="logo">DS</div>
+      <h1>DeepSeek Harness</h1>
+      <p class="sub" id="auth-sub">连接你的电脑</p>
+
+      <div id="base-form" style="display:none">
+        <div class="field">
+          <label>电脑访问地址（电脑上“手机访问”面板显示）</label>
+          <input id="base-input" inputmode="url" placeholder="http://192.168.1.5:3081" />
+        </div>
+        <button class="primary" id="btn-base-save">保存并连接</button>
+      </div>
+
+      <!-- 默认：扫码连接（主入口） -->
+      <button class="primary scan-hero" id="btn-scan" style="display:none">📷 扫描电脑上的二维码</button>
+      <div class="hint" id="scan-hint" style="display:none">在电脑上：侧边栏点“手机访问”→ 启动 → 手机扫面板上的码</div>
+      <button class="ghost" id="btn-retry" style="display:none">🔄 重新连接</button>
+
+      <div id="camera-wrap" style="display:none">
+        <video id="camera" playsinline muted></video>
+        <canvas id="camera-canvas" style="display:none"></canvas>
+        <button class="ghost" id="btn-cancel-scan">取消扫码</button>
+      </div>
+
+      <!-- 手动输入（备用，默认隐藏） -->
+      <a id="btn-manual" class="manual-link" style="display:none">手动输入配对码</a>
+      <a id="btn-gallery" class="manual-link" style="display:none">从相册选择二维码</a>
+      <input type="file" id="gallery-input" accept="image/*" style="display:none" />
+      <div id="pair-form" style="display:none">
+        <div class="field">
+          <label>配对码（电脑面板高级设置里可查看）</label>
+          <input id="pair-code" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="16 位配对码" maxlength="18" />
+        </div>
+        <div class="field">
+          <label>设备名称</label>
+          <input id="pair-name" value="我的手机" maxlength="40" />
+        </div>
+        <button class="primary" id="btn-pair">请求连接（需在电脑上确认）</button>
+      </div>
+
+      <div id="pw-form" style="display:none">
+        <div class="field">
+          <label>访问密码</label>
+          <input id="pw-input" type="password" autocomplete="current-password" placeholder="电脑面板中显示的密码" />
+        </div>
+        <button class="primary" id="btn-pw-login">进入</button>
+      </div>
+
+      <div class="status" id="auth-status"></div>
+      <div class="version" id="app-version"></div>
+    </div>
+  </section>
+
+  <!-- 首页：会话列表 -->
+  <section id="view-home" class="view" style="display:none">
+    <header class="topbar">
+      <div class="brand">DeepSeek Harness</div>
+      <div class="tb-actions">
+        <button id="btn-new" class="icon-btn" title="新建会话">＋</button>
+        <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
+      </div>
+    </header>
+    <div id="conn-bar" class="conn-bar"></div>
+    <main id="session-list" class="list"></main>
+    <div id="home-empty" class="empty" style="display:none">
+      <div>还没有会话</div>
+      <button class="primary" id="btn-empty-new">新建会话</button>
+    </div>
+  </section>
+
+  <!-- 会话详情 -->
+  <section id="view-chat" class="view" style="display:none">
+    <header class="topbar chat-top">
+      <button id="btn-back" class="icon-btn" title="返回">‹</button>
+      <div class="chat-title">
+        <div id="chat-title-text">会话</div>
+        <div id="chat-sub" class="chat-sub"></div>
+      </div>
+      <button id="btn-chat-settings" class="icon-btn" title="会话设置">⋮</button>
+    </header>
+    <div id="pending-area"></div>
+    <main id="messages" class="messages"></main>
+    <button id="btn-scroll-bottom" class="scroll-bottom" style="display:none" title="回到最新">↓</button>
+    <div id="cmd-popup" class="cmd-popup" style="display:none"></div>
+    <footer class="composer">
+      <textarea id="composer-input" rows="1" enterkeyhint="newline" placeholder="发消息给电脑上的 agent…"></textarea>
+      <button id="btn-send" class="send-btn">发送</button>
+    </footer>
+  </section>
+
+  <!-- 新建会话：选文件夹 -->
+  <section id="view-new" class="view" style="display:none">
+    <header class="topbar">
+      <button id="btn-new-back" class="icon-btn" title="返回">‹</button>
+      <div class="brand">新建会话 — 选择文件夹</div>
+    </header>
+    <main id="workspace-list" class="list"></main>
+    <div class="empty" id="ws-empty" style="display:none">电脑上还没有配置工作区</div>
+    <div class="preset-pick" id="preset-pick" style="display:none">
+      <h3 class="preset-title">Agent 预设 <span class="muted">（决定模型与推理等级）</span></h3>
+      <div id="preset-options"></div>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="view-settings" class="view" style="display:none">
+    <header class="topbar">
+      <button id="btn-settings-back" class="icon-btn" title="返回">‹</button>
+      <div class="brand">设置</div>
+    </header>
+    <main class="settings-body">
+      <div class="card" id="device-card"></div>
+      <div class="card" id="server-card"></div>
+      <div class="card" id="perm-card">
+        <div class="card-row"><span>权限模式</span><span class="muted" id="perm-current">…</span></div>
+        <div class="card-row"><span class="muted" style="font-size:12px">控制电脑文件的开放程度（点击选择）</span></div>
+      </div>
+      <div class="card">
+        <div class="card-row"><span>关于</span><span class="muted" id="about-version">v1.0</span></div>
+      </div>
+      <button class="danger" id="btn-disconnect">断开此设备连接</button>
+      <div class="hint">断开后需重新配对。切换控制设备请在电脑端操作。</div>
+    </main>
+  </section>
+
+  <!-- 通用选择弹层（权限模式 / Agent 预设 / 命令执行） -->
+  <div id="sheet-modal" class="err-modal" style="display:none">
+    <div class="err-box">
+      <h3 id="sheet-title">选择</h3>
+      <div id="sheet-options" class="sheet-options"></div>
+      <div class="err-actions">
+        <button class="ghost" id="btn-sheet-close">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <!-- 错误弹窗：任何报错都可一键复制详情反馈 -->
+  <div id="err-modal" class="err-modal" style="display:none">
+    <div class="err-box">
+      <h3 id="err-title">出错了</h3>
+      <pre id="err-detail"></pre>
+      <div class="err-actions">
+        <button class="primary" id="btn-err-copy">复制错误详情</button>
+        <button class="ghost" id="btn-err-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./vendor/jsqr.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

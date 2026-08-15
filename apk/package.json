@@ -1,0 +1,1 @@
+{"name":"dsh-mobile","version":"1.0.0","private":true,"description":"DeepSeek Harness mobile client (Capacitor wrapper)","dependencies":{"@capacitor/app":"^8.1.1","@capacitor/core":"^8.5.0","capacitor-barcode-scanner":"^8.0.0"},"devDependencies":{"@capacitor/android":"^8.5.0","@capacitor/cli":"^8.5.0"}}

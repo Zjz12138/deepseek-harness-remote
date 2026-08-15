@@ -1,0 +1,39 @@
+# --- Node ---
+node_modules/
+release/
+dist/
+
+# --- 运行时生成 / 用户数据（绝不入库） ---
+config.json
+server.log
+loading.html.bak
+*.log
+
+# --- 开发 / 测试辅助 ---
+.scan-test/
+dev-preview.js
+devtools-cmd.js
+png-analyze.js
+scan-test.js
+test-mobile-ui.js
+make-color-png.js
+make-icon.ps1
+create-shortcut.ps1
+screenshot.png
+dump.json
+
+# --- 手机 APK 构建工具（1.3GB，不提交；APK 以 Release 附件分发） ---
+apk/android/app/build/
+apk/gradle-8.14.3/
+apk/jdk21/
+apk/*.zip
+apk/node_modules/
+apk/www/
+
+# --- 隧道二进制（运行时自动下载；安装包已内置） ---
+vendor/cloudflared.exe
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,63 @@
+{
+  "name": "dsh-desktop",
+  "version": "1.8.0",
+  "description": "DeepSeek Harness desktop app (Electron shell) — 自带 dsh 服务与手机远程访问",
+  "main": "main.js",
+  "author": "DeepSeek Harness",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "^0.1.0-rc.6",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4"
+  },
+  "build": {
+    "appId": "com.deepseekharness.desktop",
+    "productName": "DeepSeek Harness",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "mobile.js",
+      "mobile-api.js",
+      "tunnel.js",
+      "preload.js",
+      "loading.html",
+      "mobile-panel.html",
+      "mobile-panel-preload.js",
+      "icon.ico",
+      "vendor/**",
+      "mobile-ui/**",
+      "node_modules/**",
+      "!node_modules/electron/**",
+      "!node_modules/.bin/**"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DeepSeek Harness"
+    },
+    "portable": {
+      "artifactName": "DeepSeek-Harness-${version}-portable.exe"
+    }
+  }
+}

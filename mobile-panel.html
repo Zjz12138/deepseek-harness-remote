@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>手机访问</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #0f1115; color: #e8eaed;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 13px; overflow-y: auto;
+  }
+  .tb {
+    height: 40px; display: flex; align-items: center;
+    padding: 0 14px; -webkit-app-region: drag;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: #111418; position: sticky; top: 0; z-index: 5;
+  }
+  .tb .title { font-weight: 600; font-size: 13px; flex: 1; }
+  .tb .close {
+    -webkit-app-region: no-drag;
+    width: 30px; height: 30px; border: none; background: transparent;
+    color: #c9cdd3; font-size: 15px; cursor: pointer; border-radius: 6px;
+  }
+  .tb .close:hover { background: rgba(255, 255, 255, 0.1); }
+  .body { padding: 18px 20px 28px; }
+
+  /* 启动视图 */
+  .start-wrap { text-align: center; padding: 28px 6px 10px; }
+  .start-icon { font-size: 44px; margin-bottom: 10px; }
+  .start-wrap h2 { font-size: 16px; margin-bottom: 8px; }
+  .start-wrap .sub { font-size: 12px; color: #9aa0a6; line-height: 1.8; margin-bottom: 22px; }
+  .big-btn {
+    width: 100%; max-width: 300px; height: 52px; margin: 0 auto;
+    background: linear-gradient(135deg, #3964fe, #7c5cff); color: #fff;
+    border: none; border-radius: 14px; font-size: 16px; font-weight: 700;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .big-btn:disabled { opacity: 0.6; }
+
+  .card {
+    background: #161a20; border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px; padding: 16px 18px; margin-top: 14px;
+  }
+  .card h3 { font-size: 12px; color: #9aa0a6; font-weight: 600; margin-bottom: 10px; }
+
+  .seg { display: flex; background: #101319; border-radius: 10px; padding: 3px; }
+  .seg button {
+    flex: 1; height: 34px; border: none; background: transparent; color: #9aa0a6;
+    border-radius: 8px; font-size: 13px; cursor: pointer;
+  }
+  .seg button.on { background: #252b36; color: #fff; }
+
+  .qr-wrap { text-align: center; margin: 14px 0 6px; }
+  .qr-wrap img { display: block; margin: 0 auto; width: 210px; height: 210px; border-radius: 10px; background: #fff; }
+  .qr-loading {
+    width: 210px; height: 210px; margin: 0 auto;
+    border-radius: 10px; background: #101319; border: 1px dashed rgba(255,255,255,.14);
+    display: flex; align-items: center; justify-content: center;
+    color: #6b7280; font-size: 13px;
+  }
+  .qr-loading::before {
+    content: ""; width: 22px; height: 22px; margin-right: 10px;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,.15); border-top-color: #3964fe;
+    animation: qrspin .8s linear infinite;
+  }
+  @keyframes qrspin { to { transform: rotate(360deg); } }
+  .qr-cap { font-size: 11px; color: #6b7280; margin-top: 8px; word-break: break-all; }
+  .pair-code-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; }
+  .pair-code-row code { font-size: 22px; font-weight: 800; letter-spacing: 4px; color: #ffd479; font-family: Consolas, monospace; }
+
+  .mini {
+    border: 1px solid rgba(255,255,255,.14); background: transparent;
+    color: #c9cdd3; border-radius: 7px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  .mini:hover { background: rgba(255,255,255,.08); }
+  .warn {
+    background: rgba(210, 153, 34, 0.10); border: 1px solid rgba(210, 153, 34, 0.35);
+    color: #e2b04e; border-radius: 10px; padding: 10px 14px; font-size: 12px; line-height: 1.7;
+    margin-top: 12px;
+  }
+  .warn b { color: #ffd479; }
+
+  .dev-item {
+    display: flex; align-items: center; gap: 8px;
+    background: #0f1115; border: 1px solid rgba(255,255,255,.08);
+    border-radius: 9px; padding: 9px 11px; margin-bottom: 6px;
+  }
+  .dev-item .d-main { flex: 1; min-width: 0; }
+  .dev-item .d-name { font-size: 13px; font-weight: 600; }
+  .dev-item .d-sub { font-size: 10px; color: #6b7280; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; background: #252b36; color: #9aa0a6; }
+  .badge.active { background: rgba(63,185,80,.15); color: #3fb950; }
+
+  .field { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .field input {
+    flex: 1; height: 32px; background: #0f1115; color: #e8eaed;
+    border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 0 10px; font-size: 12px;
+  }
+  .switch-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .switch-row .lbl { font-size: 13px; }
+  .switch-row .sub { font-size: 11px; color: #9aa0a6; margin-top: 2px; }
+  .switch {
+    position: relative; width: 42px; height: 23px; flex: none;
+    background: #333a45; border-radius: 12px; cursor: pointer; transition: background .15s;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 17px; height: 17px; border-radius: 50%; background: #fff;
+    transition: left .15s;
+  }
+  .switch.on { background: #3964fe; }
+  .switch.on::after { left: 22px; }
+
+  .row-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .btn {
+    border: 1px solid rgba(255,255,255,.16); background: #1d222b; color: #e8eaed;
+    border-radius: 9px; padding: 9px 16px; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { background: #252b36; }
+  .btn.danger { background: rgba(229,72,77,.1); border-color: rgba(229,72,77,.35); color: #f0a3a6; }
+
+  details.adv { margin-top: 16px; }
+  details.adv summary {
+    cursor: pointer; color: #9aa0a6; font-size: 12px; user-select: none;
+    padding: 6px 2px; outline: none;
+  }
+  details.adv summary:hover { color: #e8eaed; }
+  details.adv .adv-body { border-top: 1px solid rgba(255,255,255,.07); margin-top: 6px; padding-top: 8px; }
+
+  .status { font-size: 12px; margin-top: 10px; min-height: 16px; color: #9fd0ff; }
+  .status.err { color: #f0a3a6; }
+  .status.ok { color: #3fb950; }
+  .hidden { display: none; }
+  .note { font-size: 11px; color: #6b7280; line-height: 1.7; margin-top: 12px; }
+  .run-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 2px; padding: 0 2px;
+  }
+  .run-status { font-size: 13px; font-weight: 600; color: #3fb950; }
+  .stop-btn {
+    border: 1px solid rgba(229,72,77,.35); background: rgba(229,72,77,.08);
+    color: #f0a3a6; border-radius: 8px; padding: 7px 18px; font-size: 13px; cursor: pointer;
+  }
+  .stop-btn:hover { background: rgba(229,72,77,.16); }
+</style>
+</head>
+<body>
+  <div class="tb">
+    <div class="title">手机访问</div>
+    <button class="close" id="btn-close" title="关闭">✕</button>
+  </div>
+
+  <div class="body">
+    <div class="status" id="status"></div>
+
+    <!-- 未启动 -->
+    <div id="start-view">
+      <div class="start-wrap">
+        <div class="start-icon">📱</div>
+        <h2>用手机操作电脑上的 DeepSeek Harness</h2>
+        <div class="sub">启动后，手机 App 扫码即可连接（需在电脑上确认）。<br/>agent 仍在电脑上执行，会话数据完全同步。</div>
+        <button class="big-btn" id="btn-start">🚀 启动手机访问</button>
+      </div>
+    </div>
+
+    <!-- 已启动 -->
+    <div id="run-view" class="hidden">
+      <div class="run-head">
+        <div class="run-status">🟢 运行中</div>
+        <button class="stop-btn" id="btn-stop">停止</button>
+      </div>
+      <div class="card">
+        <h3>网络选择（决定手机扫哪个码）</h3>
+        <div class="seg" id="net-seg">
+          <button data-net="lan" id="seg-lan">同一网络</button>
+          <button data-net="remote" id="seg-remote">不同网络</button>
+        </div>
+        <div class="warn hidden" id="remote-warn">
+          <b>⚠️ 注意：</b>手机与电脑不在同一网络时，连接将经过公网隧道（传输加密）。
+          请确认这是你自己的手机；配对仍需电脑端确认。
+        </div>
+
+        <div class="qr-wrap">
+          <div id="qr-loading" class="qr-loading">正在生成二维码…</div>
+          <img id="qr" alt="QR" style="display:none" />
+          <div class="qr-cap" id="qr-cap"></div>
+          <div id="qr-connected" style="display:none;padding:18px 0 6px">
+            <div style="font-size:34px">✅</div>
+            <div style="color:#7ee2a8;font-weight:700;margin-top:6px">已连接</div>
+            <div class="qr-cap" id="qr-connected-name"></div>
+            <div class="qr-cap" style="margin-top:6px">配对码已消费，如需再连新手机，点下方“生成配对二维码”</div>
+          </div>
+        </div>
+        <div class="row-actions" style="justify-content:center;margin-top:4px">
+          <button class="mini" id="btn-gen-qr" style="display:none">生成配对二维码</button>
+        </div>
+        <div class="note" id="qr-hint">用手机 App 点“扫描二维码”扫上面的码（或用系统相机扫，会自动打开 App）。</div>
+      </div>
+
+      <div class="card" id="devices-card">
+        <h3>已连接设备（同一时间只有一个控制设备）</h3>
+        <div id="devices"></div>
+        <div class="note" id="devices-empty" style="display:none">还没有设备。手机扫码后，这里会显示。</div>
+      </div>
+
+      <details class="adv">
+        <summary>⚙ 高级设置</summary>
+        <div class="adv-body">
+          <div class="field">
+            <span style="color:#9aa0a6;font-size:12px;white-space:nowrap">局域网端口</span>
+            <input id="port" type="number" min="1024" max="65535" />
+            <button class="mini" id="btn-apply-port">应用</button>
+          </div>
+          <div class="switch-row">
+            <div>
+              <div class="lbl">远程访问（Cloudflare 隧道）</div>
+              <div class="sub">不在同一网络时手机也能连上</div>
+            </div>
+            <div class="switch" id="tunnel-switch"></div>
+          </div>
+          <div class="hidden" id="tunnel-url-wrap" style="margin-top:10px;background:#0f1115;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;display:flex;gap:8px;align-items:center">
+            <code id="tunnel-url" style="flex:1;font-size:11px;color:#9fd0ff;word-break:break-all">——</code>
+            <button class="mini" id="btn-tunnel-copy">复制</button>
+          </div>
+          <div class="switch-row">
+            <div>
+              <div class="lbl">手动连接（备用）</div>
+              <div class="sub">配对码已包含在二维码里，一般无需手动输入</div>
+            </div>
+            <button class="mini" id="btn-regen">重新生成</button>
+            <button class="mini" id="btn-copy-code">复制配对码</button>
+          </div>
+          <div class="hidden" id="pair-code-wrap" style="margin-top:8px;background:#0f1115;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px">
+            <code id="pair-code" style="font-size:12px;color:#ffd479;letter-spacing:1px;word-break:break-all">——</code>
+          </div>
+          <div class="row-actions">
+            <button class="btn" id="btn-firewall">放行防火墙</button>
+            <button class="btn danger" id="btn-remove-all">移除全部设备</button>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let state = null;
+    let net = 'lan'; // lan | remote
+    let busy = false;
+
+    async function refresh() {
+      try {
+        state = await window.panel.get();
+      } catch (e) {
+        $('status').textContent = String(e && e.message ? e.message : e);
+        $('status').className = 'status err';
+        return;
+      }
+      const running = !!state.running;
+      const tun = state.tunnel || {};
+      $('start-view').style.display = running ? 'none' : 'block';
+      $('run-view').classList.toggle('hidden', !running);
+      if (!running) return;
+
+      $('status').textContent = '运行中 · 端口 ' + state.port +
+        (tun.running
+          ? tun.ready
+            ? ' · 远程已就绪'
+            : tun.verifyFailed
+              ? ' · 远程异常（本机探测未通过）'
+              : ' · 远程连接中…'
+          : '');
+      $('status').className = 'status ok';
+      $('port').value = state.port;
+
+      // 网络选择 → 选二维码
+      $('seg-lan').classList.toggle('on', net === 'lan');
+      $('seg-remote').classList.toggle('on', net === 'remote');
+      $('remote-warn').classList.toggle('hidden', net !== 'remote');
+      const qrs = state.pairQrs || [];
+      // 已连接：显示"已连接"状态，二维码区收起（配对码已消费）
+      // 注意：lastSeen 超过 90 秒未更新视为已离线（手机断网/退出 App 后不再更新），
+      // 此时不显示"已连接"，避免"手机已经断了但面板一直显示已连接"的假象。
+      const activeDev = (state.devices || []).find((d) => d.active);
+      const fresh = activeDev && activeDev.lastSeen && (Date.now() - activeDev.lastSeen) < 90e3;
+      const pairedConnected = !state.pairPending && !!activeDev && !!fresh;
+      $('qr-connected').style.display = pairedConnected ? 'block' : 'none';
+      if (pairedConnected) $('qr-connected-name').textContent = '控制设备：' + activeDev.name;
+      // 无配对码时显示“生成配对二维码”兜底按钮
+      $('btn-gen-qr').style.display = state.pairPending ? 'none' : 'block';
+      if (pairedConnected) {
+        $('qr-loading').style.display = 'none';
+        $('qr').style.display = 'none';
+        $('qr-cap').textContent = '';
+        $('pair-code').textContent = '--------';
+      } else if (activeDev) {
+        // 有控制设备但已离线：不显示加载/空白，提示离线 + 保留"重新生成二维码"入口
+        const offMs = Date.now() - (activeDev.lastSeen || 0);
+        const offMin = Math.max(1, Math.round(offMs / 60000));
+        $('qr-loading').style.display = 'none';
+        $('qr').style.display = 'none';
+        $('qr-cap').textContent = '控制设备「' + activeDev.name + '」已离线（约 ' + offMin + ' 分钟前活跃）';
+        $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
+      } else {
+      const showLoading = () => {
+        $('qr-loading').style.display = 'flex';
+        $('qr').style.display = 'none';
+      };
+      const showQr = (entry) => {
+        $('qr-loading').style.display = 'none';
+        $('qr').style.display = 'block';
+        $('qr').src = entry.qr;
+        $('qr-cap').textContent = entry.label;
+      };
+      let entry = null;
+      if (net === 'lan') {
+        entry = qrs.find((e) => !e.label.startsWith('远程')) || qrs[0] || null;
+      } else {
+        if (!tun.running) {
+          showLoading();
+          $('qr-cap').textContent = '需要先开启远程访问（选“不同网络”会自动开启，或在高级设置里打开）';
+          $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
+          return;
+        }
+        // 隧道未就绪（边缘路由还没生效）时不展示二维码，避免手机扫到 530
+        if (!tun.ready && !tun.verifyFailed) {
+          showLoading();
+          $('qr-cap').textContent = '隧道连接中…（约几秒后自动出现二维码）';
+          $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
+          return;
+        }
+        entry = qrs.find((e) => e.label.startsWith('远程')) || null;
+      }
+      if (!entry || !entry.qr) {
+        showLoading();
+        $('qr-cap').textContent = state.pairPending ? '正在生成配对二维码…' : '点“生成配对二维码”即可扫码连接';
+        return;
+      }
+      showQr(entry);
+      if (tun.verifyFailed) {
+        $('qr-cap').textContent = entry.label + ' ⚠ 本机探测该地址未通过（网络可能屏蔽 Cloudflare）；若手机扫码失败，请改用“同一网络”';
+      }
+      $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
+      } // end: 非已连接 → 展示二维码
+
+      // 设备列表
+      const devs = state.devices || [];
+      $('devices-empty').style.display = devs.length ? 'none' : 'block';
+      $('devices').innerHTML = '';
+      for (const d of devs) {
+        const item = document.createElement('div');
+        item.className = 'dev-item';
+        const when = d.lastSeen ? new Date(d.lastSeen).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        const online = d.lastSeen && (Date.now() - d.lastSeen) < 90e3;
+        item.innerHTML = `
+          <div class="d-main">
+            <div class="d-name">${esc(d.name)} ${d.active ? '<span class="badge active">控制设备</span>' : ''} ${online ? '<span class="badge">在线</span>' : '<span class="badge" style="color:#f0a3a6">离线</span>'}</div>
+            <div class="d-sub">最近 ${when || '—'}</div>
+          </div>
+          ${d.active ? '' : '<button class="mini" data-act="' + d.id + '">设为当前</button>'}
+          <button class="mini" data-rm="' + d.id + '">移除</button>`;
+        item.querySelector('[data-act]')?.addEventListener('click', async () => {
+          await window.panel.setActiveDevice(d.id);
+          await refresh();
+        });
+        item.querySelector('[data-rm]')?.addEventListener('click', async () => {
+          if (!confirm('移除设备「' + d.name + '」？其手机端将立即失效。')) return;
+          await window.panel.removeDevice(d.id);
+          await refresh();
+        });
+        $('devices').appendChild(item);
+      }
+
+      // 高级设置：隧道状态
+      $('tunnel-switch').classList.toggle('on', !!tun.running);
+      $('tunnel-url-wrap').classList.toggle('hidden', !tun.url);
+      if (tun.url) $('tunnel-url').textContent = tun.url;
+    }
+
+    function flash(btn, text) {
+      const old = btn.textContent;
+      btn.textContent = text;
+      setTimeout(() => { btn.textContent = old; }, 1200);
+    }
+
+    function esc(s) {
+      return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    /** 启动手机访问 + 自动生成配对二维码 */
+    $('btn-start').onclick = async () => {
+      if (busy) return;
+      busy = true;
+      const btn = $('btn-start');
+      btn.disabled = true;
+      btn.textContent = '正在启动…';
+      $('status').textContent = '';
+      try {
+        await window.panel.setEnabled(true);
+        try { await window.panel.pairStart(); } catch {}
+        $('status').textContent = '已启动，手机扫码即可连接';
+        $('status').className = 'status ok';
+      } catch (e) {
+        $('status').textContent = String(e && e.message ? e.message : e);
+        $('status').className = 'status err';
+      } finally {
+        busy = false;
+        btn.disabled = false;
+        btn.textContent = '🚀 启动手机访问';
+        await refresh();
+      }
+    };
+
+    /** 停止手机访问（关闭服务 + 远程隧道） */
+    $('btn-stop').onclick = async () => {
+      if (busy) return;
+      busy = true;
+      $('status').textContent = '正在停止…';
+      $('status').className = 'status';
+      try {
+        await window.panel.setEnabled(false);
+        $('status').textContent = '已停止手机访问';
+        $('status').className = 'status ok';
+      } catch (e) {
+        $('status').textContent = String(e && e.message ? e.message : e);
+        $('status').className = 'status err';
+      } finally {
+        busy = false;
+        await refresh();
+      }
+    };
+
+    $('seg-lan').onclick = () => { net = 'lan'; refresh(); };
+    $('seg-remote').onclick = async () => {
+      net = 'remote';
+      const tun = (state || {}).tunnel || {};
+      if (!tun.running) {
+        // 自动尝试开启隧道
+        $('status').textContent = '正在开启远程访问…';
+        $('status').className = 'status';
+        try {
+          await window.panel.tunnelSet(true);
+          try { await window.panel.pairStart(); } catch {}
+          $('status').textContent = '远程访问已开启';
+          $('status').className = 'status ok';
+        } catch (e) {
+          $('status').textContent = '远程开启失败：' + String(e && e.message ? e.message : e);
+          $('status').className = 'status err';
+        }
+      }
+      refresh();
+    };
+
+    $('btn-regen').onclick = async () => {
+      try { await window.panel.pairStart(); } catch (e) {
+        $('status').textContent = String(e && e.message ? e.message : e);
+        $('status').className = 'status err';
+      }
+      refresh();
+    };
+    $('btn-gen-qr').onclick = $('btn-regen').onclick;
+    $('btn-copy-code').onclick = async () => { await window.panel.copy($('pair-code').textContent); flash($('btn-copy-code'), '已复制'); };
+
+    $('btn-apply-port').onclick = async () => {
+      const p = parseInt($('port').value, 10);
+      if (!(p >= 1024 && p <= 65535)) { $('status').textContent = '端口需在 1024-65535 之间'; $('status').className = 'status err'; return; }
+      try {
+        await window.panel.setPort(p);
+        $('status').textContent = '端口已更新';
+        $('status').className = 'status ok';
+      } catch (e) {
+        $('status').textContent = String(e && e.message ? e.message : e);
+        $('status').className = 'status err';
+      }
+      await refresh();
+    };
+
+    $('tunnel-switch').onclick = async () => {
+      const tun = (state || {}).tunnel || {};
+      try {
+        await window.panel.tunnelSet(!tun.running);
+        if (!tun.running) { try { await window.panel.pairStart(); } catch {} }
+      } catch (e) {
+        $('status').textContent = String(e && e.message ? e.message : e);
+        $('status').className = 'status err';
+      }
+      await refresh();
+    };
+    $('btn-tunnel-copy').onclick = async () => { await window.panel.copy($('tunnel-url').textContent); flash($('btn-tunnel-copy'), '已复制'); };
+
+    $('btn-firewall').onclick = async () => {
+      const r = await window.panel.firewall();
+      $('status').textContent = r.message || (r.ok ? '已添加防火墙规则' : '需要管理员权限');
+      $('status').className = r.ok ? 'status ok' : 'status err';
+    };
+
+    $('btn-remove-all').onclick = async () => {
+      if (!confirm('移除全部已配对设备？所有手机都将失效，需要重新扫码配对。')) return;
+      const devs = (state.devices || []).slice();
+      for (const d of devs) await window.panel.removeDevice(d.id);
+      await refresh();
+    };
+
+    $('btn-close').onclick = () => window.panel.close();
+
+    // 隧道重启/地址变化时立即刷新（面板另有 3 秒轮询兜底）
+    window.panel.onTunnelUpdated(() => refresh());
+
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>

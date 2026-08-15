@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DeepSeek Harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #0f1115;
+    color: #e8eaed;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex;
+    -webkit-user-select: none; user-select: none;
+    overflow: hidden;
+  }
+
+  /* 左侧栏（骨架） */
+  .side {
+    width: 232px; flex: none;
+    background: #111418;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 16px 12px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .side .brand { display: flex; align-items: center; gap: 10px; padding: 2px 4px 10px; }
+  .side .logo {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: linear-gradient(135deg, #3964fe, #7c4dff);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #fff; flex: none;
+  }
+  .side .brand .bt {
+    font-size: 13px; font-weight: 600; color: #e8eaed; white-space: nowrap;
+  }
+  .nav { display: flex; flex-direction: column; gap: 8px; }
+  .nav .item {
+    height: 34px; border-radius: 8px;
+    display: flex; align-items: center; gap: 10px; padding: 0 10px;
+    background: rgba(255, 255, 255, 0.035);
+  }
+  .nav .item .dot { width: 14px; height: 14px; border-radius: 4px; background: rgba(255,255,255,.12); flex: none; }
+  .nav .item .bar { height: 10px; border-radius: 5px; background: rgba(255,255,255,.10); }
+  .nav .item .bar.w40 { width: 40%; }
+  .nav .item .bar.w60 { width: 60%; }
+
+  /* 主区域（骨架） */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 20px 28px; gap: 16px; }
+  .status-row { display: flex; align-items: center; gap: 12px; }
+  .spinner {
+    width: 20px; height: 20px; flex: none;
+    border-radius: 50%;
+    border: 2.5px solid rgba(255, 255, 255, .14);
+    border-top-color: #3964fe;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #app-status { font-size: 13px; color: #9aa0a6; }
+
+  .skeleton { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+  .skeleton .row {
+    height: 40px; border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    position: relative; overflow: hidden;
+  }
+  .skeleton .row.short { width: 55%; }
+  .skeleton .line {
+    height: 12px; border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    position: relative; overflow: hidden;
+  }
+  .skeleton .line.l1 { width: 92%; }
+  .skeleton .line.l2 { width: 68%; }
+  .skeleton .line.l3 { width: 80%; }
+  .skeleton .line.l4 { width: 45%; }
+  /* 流光动画 */
+  .skeleton .row::after, .skeleton .line::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.07) 50%, transparent 70%);
+    animation: shimmer 1.4s infinite;
+  }
+  .skeleton .row::after { border-radius: 10px; }
+  .skeleton .line::after { border-radius: 6px; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  .hint { font-size: 12px; color: #5f6368; margin-top: auto; padding-bottom: 8px; }
+
+  /* 错误状态 */
+  body[data-state="error"] .spinner { border-top-color: #e5484d; animation: none; }
+  body[data-state="error"] #app-status { color: #f0a3a6; }
+  body[data-state="error"] .skeleton { display: none; }
+</style>
+</head>
+<body data-state="starting">
+  <div class="side">
+    <div class="brand">
+      <div class="logo">DS</div>
+      <div class="bt">DeepSeek Harness</div>
+    </div>
+    <div class="nav">
+      <div class="item"><span class="dot"></span><span class="bar w60"></span></div>
+      <div class="item"><span class="dot"></span><span class="bar w40"></span></div>
+      <div class="item"><span class="dot"></span><span class="bar w60"></span></div>
+      <div class="item"><span class="dot"></span><span class="bar w40"></span></div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="status-row">
+      <div class="spinner"></div>
+      <div id="app-status">正在启动 DeepSeek Harness…</div>
+    </div>
+    <div class="skeleton">
+      <div class="line l1"></div>
+      <div class="line l2"></div>
+      <div class="row short"></div>
+      <div class="line l3"></div>
+      <div class="line l4"></div>
+      <div class="row"></div>
+    </div>
+    <div class="hint">会话数据加载中…</div>
+  </div>
+</body>
+</html>
