@@ -476,6 +476,11 @@ function registerMobileIpc() {
   });
 
   ipcMain.handle('mobile:get', async () => {
+    // 配对码过期（10 分钟）后自动换一个新的，避免面板一直显示过期二维码
+    const cur = mobile.getState();
+    if (cur.pairPending && cur.pairPending.expiresAt < Date.now()) {
+      mobile.createPendingPair();
+    }
     const state = mobile.getState();
     state.urls = mobile.urls();
     state.tunnel = {

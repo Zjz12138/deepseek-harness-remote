@@ -11,9 +11,10 @@ const $ = (id) => document.getElementById(id);
 const LS_TOKEN = 'dshm_token';
 const LS_DEVICE = 'dshm_device';
 const LS_BASE = 'dshm_base';
+const LS_BASES = 'dshm_bases'; // 已知电脑地址列表 [{url, lastOk}]，连不上时自动换地址重试
 const LS_DEVICE_ID = 'dshm_device_id';
 const LS_CACHE = 'dshm_cache'; // 会话消息缓存 {sessionId: {msgs, ts}}
-const APP_VERSION = '0.0.1';
+const APP_VERSION = '1.2.0';
 
 /** 持久设备标识：同一台手机重新配对时服务端据此识别为同一设备。 */
 function deviceId() {
@@ -48,6 +49,7 @@ function showFatalError(msg) {
 }
 
 let base = ''; // 电脑地址（扫码后自动写入）
+let bases = []; // 已知地址列表 [{url, lastOk}]，自动切换用
 let token = null;
 let device = null;
 let mode = 'pair';
@@ -57,6 +59,7 @@ let currentSessionId = null;
 let currentWsId = null; // 新建会话选中的工作区
 let lastSessions = { items: [] };
 let pairingInFlight = false;
+let failoverInFlight = false; // 防止并发自动切换地址
 
 // 会话操作状态（输入框内的快捷切换按钮）
 let currentPerm = ''; // 当前权限模式 id（read-only / workspace-write / danger-full-access）
@@ -237,37 +240,34 @@ function fmtTime(ts) {
 // ---------------------------------------------------------------------------
 
 async function boot() {
+  loadBases();
   const storedBase = localStorage.getItem(LS_BASE);
   if (storedBase) base = storedBase;
+  token = localStorage.getItem(LS_TOKEN);
+  // 有 token：依次尝试所有已知地址（当前地址优先），找到能连上的直接进入
+  if (token) {
+    const r = await tryAllBases();
+    if (r === 'ok') {
+      showView('home');
+      homePoll();
+      return;
+    }
+    if (r === 'auth') {
+      // 地址可达但 401 → token 被吊销，需要重新配对
+      clearToken();
+      showAuth('登录已失效，请重新扫码配对');
+      return;
+    }
+    showAuth('无法连接电脑（' + (bases.length ? '已尝试 ' + bases.length + ' 个地址' : '未设置地址') + '），请检查网络后重试');
+    $('btn-retry').style.display = 'block';
+    return;
+  }
   // PWA 同源场景：base 为空 → 直接用当前源
   try {
     await api('/auth/status');
   } catch (e) {
-    // 同源 PWA 无需 base；连接失败等配对时再提示
     if (!base && !location.protocol.startsWith('http')) {
       showAuth('请先输入电脑的访问地址');
-    }
-  }
-  token = localStorage.getItem(LS_TOKEN);
-  if (token) {
-    try {
-      const me = await api('/auth/me');
-      device = me.device;
-      mode = me.mode;
-      saveToken(token, device);
-      showView('home');
-      homePoll();
-      return;
-    } catch (e) {
-      // 只有 401（token 被吊销）才清除并重新配对；
-      // 网络错误/离线/隧道抖动时保留 token，给出"重试"而不是强制重新扫码。
-      if (e && e.code === 'AUTH_EXPIRED') {
-        clearToken();
-      } else {
-        showAuth('无法连接电脑（' + (e && e.message || e) + '），请检查网络后重试');
-        $('btn-retry').style.display = 'block';
-        return;
-      }
     }
   }
   showAuth('');
@@ -303,21 +303,40 @@ async function showAuth(msg) {
 }
 
 // 手动输入折叠切换
-// 配对码手动输入已移除（扫码是唯一入口）：此按钮不再使用
-if ($('btn-manual')) $('btn-manual').style.display = 'none';
+// 配对码手动输入已移除（扫码是唯一入口）：此按钮改为展开“手动输入电脑地址”
+// 备用于 远程隧道地址变化、相机不可用 等场景（电脑面板上有“复制”按钮）。
+if ($('btn-manual')) {
+  $('btn-manual').addEventListener('click', () => {
+    $('base-form').style.display = 'block';
+    $('btn-manual').style.display = 'none';
+    $('scan-hint').style.display = 'none';
+    $('base-input').focus();
+  });
+  $('btn-manual').style.display = 'block';
+}
 
-// 重新连接：token 仍在但网络错误时，一键重试（不清 token、不重新扫码）
+// 重新连接：token 仍在但网络错误时，一键重试（不清 token、不重新扫码）。
+// 会依次尝试所有已知地址（当前地址 → 最近可用的其它地址）。
 $('btn-retry').addEventListener('click', () => {
   $('btn-retry').disabled = true;
   $('auth-status').textContent = '正在重新连接…';
   $('auth-status').className = 'status';
-  boot()
-    .catch((e) => {
-      $('auth-status').textContent = '连接失败：' + (e && e.message || e);
-      $('auth-status').className = 'status err';
-      $('btn-retry').style.display = 'block';
-    })
-    .finally(() => { $('btn-retry').disabled = false; });
+  (async () => {
+    const r = await tryAllBases();
+    if (r === 'ok') {
+      showView('home');
+      homePoll();
+      return;
+    }
+    if (r === 'auth') {
+      clearToken();
+      showAuth('登录已失效，请重新扫码配对');
+      return;
+    }
+    $('auth-status').textContent = '连接失败：所有已知地址均不可达，请检查网络后重试';
+    $('auth-status').className = 'status err';
+    $('btn-retry').style.display = 'block';
+  })().finally(() => { $('btn-retry').disabled = false; });
 });
 
 // 从相册选择二维码：截图/图片里的配对码也能扫（开发测试和真机都方便）
@@ -392,7 +411,7 @@ function tryDecode(img) {
   return null;
 }
 
-$('btn-base-save').addEventListener('click', () => {
+$('btn-base-save').addEventListener('click', async () => {
   const v = $('base-input').value.trim();
   if (!/^https?:\/\/\S+$/i.test(v)) {
     $('auth-status').textContent = '地址格式不对，示例：http://192.168.1.5:3081';
@@ -401,11 +420,27 @@ $('btn-base-save').addEventListener('click', () => {
   }
   try {
     setBase(v);
-    showAuth('');
   } catch (e) {
     $('auth-status').textContent = '地址无效：' + e.message;
     $('auth-status').className = 'status err';
+    return;
   }
+  // 有 token：保存地址后直接尝试连接（无需重新扫码）
+  token = localStorage.getItem(LS_TOKEN);
+  if (token) {
+    $('auth-status').textContent = '正在连接…';
+    $('auth-status').className = 'status';
+    const ok = await tryAllBases();
+    if (ok) {
+      showView('home');
+      homePoll();
+      return;
+    }
+    $('auth-status').textContent = '无法连接该地址，请确认电脑端“手机访问”已启动';
+    $('auth-status').className = 'status err';
+    return;
+  }
+  showAuth('');
 });
 
 function canUseCamera() {
@@ -417,6 +452,170 @@ function setBase(url) {
   const u = new URL(url);
   base = u.origin;
   localStorage.setItem(LS_BASE, base);
+  rememberBase(base);
+}
+
+// ---------------------------------------------------------------------------
+// 多地址记忆：电脑可能同时有 局域网地址 + 远程隧道地址。
+// 隧道地址每次重启都会变，但局域网地址基本稳定 —— 手机记住所有地址，
+// 连不上时按“最近可用”顺序自动换地址重试，而不是只能重新扫码。
+// ---------------------------------------------------------------------------
+
+function loadBases() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(LS_BASES) || '[]');
+    bases = Array.isArray(arr) ? arr.filter((b) => b && typeof b.url === 'string' && /^https?:\/\//.test(b.url)) : [];
+  } catch { bases = []; }
+  const cur = localStorage.getItem(LS_BASE);
+  if (cur && !bases.some((b) => b.url === cur)) bases.unshift({ url: cur, lastOk: 0 });
+}
+
+function saveBases() {
+  try {
+    localStorage.setItem(LS_BASES, JSON.stringify(bases.slice(0, 6)));
+  } catch {}
+}
+
+function rememberBase(url) {
+  const u = String(url || '').replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(u)) return;
+  bases = bases.filter((b) => b.url !== u);
+  bases.unshift({ url: u, lastOk: Date.now() });
+  saveBases();
+}
+
+function markBaseOk(url) {
+  const u = String(url || '').replace(/\/+$/, '');
+  const b = bases.find((x) => x.url === u);
+  if (b) {
+    b.lastOk = Date.now();
+    bases.sort((a, c) => (c.lastOk || 0) - (a.lastOk || 0));
+    saveBases();
+  }
+}
+
+/** 所有已知地址（当前 base 优先，其余按最近可用排序）。
+ * 局域网地址（http://IP）比隧道地址（https://*.trycloudflare.com）稳定：
+ * 隧道地址每次重启都会变 —— 当前 base 是隧道时，先试局域网，
+ * 能连上就省去等待死隧道超时；当前 base 是局域网时直接秒连。 */
+function candidateBases() {
+  const lan = (u) => !isTunnelUrl(u);
+  const cur = base;
+  const others = [...bases]
+    .filter((b) => b.url && b.url !== cur)
+    .sort((a, c) => (c.lastOk || 0) - (a.lastOk || 0));
+  const out = [];
+  if (cur) {
+    if (lan(cur)) {
+      out.push(cur);
+      // 其余：局域网优先（稳定，重启后隧道地址变化但局域网不变），再按最近可用
+      out.push(...others.filter((b) => lan(b.url)).map((b) => b.url));
+      out.push(...others.filter((b) => !lan(b.url)).map((b) => b.url));
+    } else {
+      // 当前是隧道（重启后大概率已失效）：先试局域网，再当前隧道，最后其它隧道
+      out.push(...others.filter((b) => lan(b.url)).map((b) => b.url));
+      out.push(cur);
+      out.push(...others.filter((b) => !lan(b.url)).map((b) => b.url));
+    }
+  } else {
+    // PWA 同源场景（base 为空且页面由电脑的 3081 服务提供）：直接用当前页面源。
+    // 排除 Capacitor WebView 自身的 https://localhost（那不是电脑地址）。
+    if (location && /^http:/.test(location.protocol) && !/localhost|127\.0\.0\.1/.test(location.hostname || '')) {
+      out.push(location.origin);
+    }
+    out.push(...others.filter((b) => lan(b.url)).map((b) => b.url));
+    out.push(...others.filter((b) => !lan(b.url)).map((b) => b.url));
+  }
+  return [...new Set(out)];
+}
+
+function isTunnelUrl(u) {
+  return /trycloudflare\.com/i.test(String(u || ''));
+}
+
+/** 带超时的探测请求（不触发 api() 的 401 清理逻辑；失败返回 null 而非抛错）。 */
+async function probeBase(url, timeoutMs = 4000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url + '/auth/me', {
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+      signal: ctl.signal,
+    });
+    clearTimeout(t);
+    if (res.status === 401) return { status: 401 };
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.device ? { status: 200, data } : null;
+  } catch {
+    clearTimeout(t);
+    return null;
+  }
+}
+
+/**
+ * 依次尝试所有已知地址，找到第一个能连上的并切换过去。
+ * @returns {Promise<string>} 'ok'（已连上）| 'auth'（地址可达但 token 被吊销）| 'fail'
+ */
+async function tryAllBases() {
+  const cands = candidateBases();
+  let saw401 = false;
+  for (let i = 0; i < cands.length; i++) {
+    const u = cands[i];
+    // 当前地址（可能刚死的隧道）用短超时快速失败，尽快切到局域网
+    const r = await probeBase(u, i === 0 ? 2500 : 4000);
+    if (r && r.status === 200 && r.data) {
+      if (base !== u) {
+        base = u;
+        localStorage.setItem(LS_BASE, u);
+      }
+      markBaseOk(u);
+      device = r.data.device;
+      mode = r.data.mode;
+      saveToken(token, device);
+      return 'ok';
+    }
+    if (r && r.status === 401) saw401 = true;
+  }
+  return saw401 ? 'auth' : 'fail';
+}
+
+/**
+ * 网络错误时的自动换地址：轮询发现当前地址连不上时调用。
+ * 只尝试其它地址（当前地址刚失败，不重复试），成功则切换并通知界面。
+ * @returns {Promise<boolean>}
+ */
+async function autoFailover() {
+  if (failoverInFlight) return false;
+  failoverInFlight = true;
+  try {
+    const others = bases
+      .map((b) => b.url)
+      .filter((u) => u && u !== base)
+      .sort((a, c) => (isTunnelUrl(a) ? 1 : 0) - (isTunnelUrl(c) ? 1 : 0));
+    for (const u of others) {
+      const r = await probeBase(u, 3500);
+      if (r && r.status === 200 && r.data) {
+        base = u;
+        localStorage.setItem(LS_BASE, u);
+        markBaseOk(u);
+        device = r.data.device;
+        mode = r.data.mode;
+        saveToken(token, device);
+        toast('已自动切换连接地址');
+        return true;
+      }
+      if (r && r.status === 401) {
+        // 其它地址可达但 token 已被吊销 → 需要重新配对
+        clearToken();
+        showAuth('登录已失效，请重新扫码配对');
+        return true;
+      }
+    }
+  } finally {
+    failoverInFlight = false;
+  }
+  return false;
 }
 
 /** 自动设备名（扫码配对时无需手动输入）。 */
@@ -451,6 +650,12 @@ async function requestPair(code, name) {
     if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
     saveToken(data.token, data.device);
     mode = data.mode;
+    // 服务端把当前所有可用地址（局域网 IP + 远程隧道）一并返回：
+    // 保存下来，之后连不上时自动换地址重试
+    if (Array.isArray(data.urls)) {
+      for (const u of data.urls) rememberBase(u);
+    }
+    rememberBase(base);
     $('auth-status').textContent = '配对成功！';
     $('auth-status').className = 'status ok';
     showView('home');
@@ -713,7 +918,23 @@ async function homePoll() {
     $('conn-bar').textContent = parts.join(' · ');
   } catch (e) {
     $('conn-bar').textContent = e.message;
-    if (e.message.includes('无法连接')) clearToken(), showAuth('与电脑的连接已断开');
+    // 只有 401（token 被吊销）才清 token 重新配对；
+    // 网络错误/隧道地址变化 → 保留 token，自动尝试其它已知地址
+    if (e && e.code === 'AUTH_EXPIRED') {
+      clearToken();
+      showAuth('登录已失效，请重新配对');
+      return;
+    }
+    autoFailover().then((switched) => {
+      if (switched) {
+        $('conn-bar').textContent = '已切换地址，正在重连…';
+        homePoll();
+      } else if (currentView === 'home') {
+        // 所有已知地址都连不上：回到连接页（扫码/重试入口），但不清 token
+        showAuth('连接已断开：电脑端可能已重启（远程地址变化）或网络不可达');
+        $('btn-retry').style.display = 'block';
+      }
+    });
   }
 }
 
@@ -904,7 +1125,18 @@ async function chatPoll() {
       ctx && ctx.contextWindow ? `🧠 ${fmtTokens(ctx.usedTokens)} / ${fmtTokens(ctx.contextWindow)} (${Math.min(100, ctx.percent || 0)}%)` : '',
     ].filter(Boolean).join(' · ');
   } catch (e) {
-    // 会话可能刚创建；忽略瞬时错误
+    // 会话可能刚创建；忽略瞬时错误。连续网络错误 → 尝试自动换地址
+    if (e && e.code === 'AUTH_EXPIRED') {
+      clearToken();
+      showAuth('登录已失效，请重新配对');
+      return;
+    }
+    autoFailover().then((switched) => {
+      if (switched) {
+        $('chat-sub').textContent = '⚠ 已切换地址，正在重连…';
+        chatPoll();
+      }
+    });
   }
 }
 
@@ -1563,6 +1795,8 @@ async function settingsPoll() {
     } catch { $('perm-current').textContent = '—'; }
     const rows = [];
     if (st.activeDevice) rows.push(`<div class="card-row"><span class="muted">当前控制设备</span><span>${esc(st.activeDevice.name)}</span></div>`);
+    rows.push(`<div class="card-row"><span class="muted">连接地址</span><span style="font-size:11px;color:#9fd0ff;word-break:break-all">${esc(base || '—')}</span></div>`);
+    rows.push(`<div class="card-row"><span class="muted">已保存地址</span><span style="font-size:11px;word-break:break-all">${esc(bases.map((b) => b.url).join('、') || '—')}</span></div>`);
     rows.push(`<div class="card-row"><span class="muted">电脑服务</span><span class="${st.dshUp ? 'badge run' : 'badge pending'}">${st.dshUp ? '运行中' : '未运行'}</span></div>`);
     if (st.tunnel && st.tunnel.url) rows.push(`<div class="card-row"><span class="muted">远程地址</span><span style="font-size:11px;color:#9fd0ff;word-break:break-all">${esc(st.tunnel.url)}</span></div>`);
     rows.push(`<div class="card-row"><span class="muted">已配对设备</span><span>${st.deviceCount}</span></div>`);

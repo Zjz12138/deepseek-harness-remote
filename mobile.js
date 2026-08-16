@@ -277,10 +277,17 @@ async function handleAuth(req, res, urlPath) {
     pendingPair = null;
     persist();
     log(`paired device "${deviceName}" active=${device.active}`);
+    // 把当前可用的所有地址（局域网 IP + 远程隧道）一并给手机：
+    // 隧道地址每次重启都会变，但局域网地址基本稳定 —— 手机保存后
+    // 下次连不上时能自动换地址重试，而不是只能重新扫码。
+    const addrs = [...new Set(urls())];
+    const turl = tunnelStatus ? tunnelStatus() : null;
+    if (turl && turl.url) addrs.push(turl.url);
     return sendJson(res, 200, {
       token,
       device: { id: device.id, name: device.name, active: device.active },
       mode,
+      urls: addrs,
     });
   }
 
@@ -536,6 +543,9 @@ function start(options) {
   passwordHash = options.passwordHash || sha256Hex(options.password || '');
   plainPassword = options.password || '';
   devices = Array.isArray(options.devices) ? options.devices : [];
+  // 上一会话持久化的 lastSeen 可能是“刚用过手机”的旧值：清零，
+  // 避免面板在手机尚未真正连上本会话时误显示“在线/已连接”。
+  for (const d of devices) d.lastSeen = 0;
   pendingPair = null;
   passwordSessions.clear();
   if (typeof options.saveConfig === 'function') saveConfig = options.saveConfig;

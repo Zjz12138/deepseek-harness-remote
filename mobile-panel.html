@@ -197,6 +197,10 @@
         <div class="row-actions" style="justify-content:center;margin-top:4px">
           <button class="mini" id="btn-gen-qr" style="display:none">生成配对二维码</button>
         </div>
+        <div class="warn hidden" id="offline-hint">
+          <b>💡 连不上？</b>电脑重启后远程隧道地址会变化：手机 App 会自动尝试局域网地址重连；
+          若仍失败，直接扫上方的二维码重新配对即可（手机已配对过，重扫会替换旧连接，无需重装）。
+        </div>
         <div class="note" id="qr-hint">用手机 App 点“扫描二维码”扫上面的码（或用系统相机扫，会自动打开 App）。</div>
       </div>
 
@@ -268,7 +272,10 @@
       // 已连接设备（fresh 定义见下方）先算出来，用于状态行优先显示“已连接”
       const activeDev = (state.devices || []).find((d) => d.active);
       const fresh = activeDev && activeDev.lastSeen && (Date.now() - activeDev.lastSeen) < 90e3;
-      const devConnected = !state.pairPending && !!activeDev && !!fresh;
+      // 手机是否在线：只看 lastSeen 是否新鲜（不依赖配对码状态 ——
+      // 手机用旧 token 自动重连（隧道地址变化后换局域网地址）时不会重新配对，
+      // pairPending 仍存在，不能因此误判为离线）。
+      const devConnected = !!activeDev && !!fresh;
 
       let statusText = '运行中 · 端口 ' + state.port;
       if (devConnected) {
@@ -296,22 +303,11 @@
       const pairedConnected = devConnected;
       $('qr-connected').style.display = pairedConnected ? 'block' : 'none';
       if (pairedConnected) $('qr-connected-name').textContent = '控制设备：' + activeDev.name;
-      // 无配对码时显示“生成配对二维码”兜底按钮
+      // 无配对码时显示“生成配对二维码”兜底按钮；有配对码但设备离线时
+      // 二维码仍然展示（重新扫码即可让手机换新 token 重连），避免“离线了就扫不了码”
       $('btn-gen-qr').style.display = state.pairPending ? 'none' : 'block';
-      if (pairedConnected) {
-        $('qr-loading').style.display = 'none';
-        $('qr').style.display = 'none';
-        $('qr-cap').textContent = '';
-        $('pair-code').textContent = '--------';
-      } else if (activeDev) {
-        // 有控制设备但已离线：不显示加载/空白，提示离线 + 保留"重新生成二维码"入口
-        const offMs = Date.now() - (activeDev.lastSeen || 0);
-        const offMin = Math.max(1, Math.round(offMs / 60000));
-        $('qr-loading').style.display = 'none';
-        $('qr').style.display = 'none';
-        $('qr-cap').textContent = '控制设备「' + activeDev.name + '」已离线（约 ' + offMin + ' 分钟前活跃）';
-        $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
-      } else {
+      // 离线提示条：有控制设备但已离线时显示
+      $('offline-hint').style.display = activeDev && !pairedConnected ? 'block' : 'none';
       const showLoading = () => {
         $('qr-loading').style.display = 'flex';
         $('qr').style.display = 'none';
@@ -320,8 +316,19 @@
         $('qr-loading').style.display = 'none';
         $('qr').style.display = 'block';
         $('qr').src = entry.qr;
-        $('qr-cap').textContent = entry.label;
+        let cap = entry.label;
+        if (activeDev && !pairedConnected) {
+          const offMin = Math.max(1, Math.round((Date.now() - (activeDev.lastSeen || 0)) / 60000));
+          cap = '控制设备「' + activeDev.name + '」已离线（约 ' + offMin + ' 分钟前活跃）· ' + entry.label;
+        }
+        $('qr-cap').textContent = cap;
       };
+      if (pairedConnected) {
+        $('qr-loading').style.display = 'none';
+        $('qr').style.display = 'none';
+        $('qr-cap').textContent = '';
+        $('pair-code').textContent = '--------';
+      } else {
       let entry = null;
       if (net === 'lan') {
         entry = qrs.find((e) => !e.label.startsWith('远程')) || qrs[0] || null;
