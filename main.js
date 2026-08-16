@@ -1018,6 +1018,8 @@ function menuTemplates() {
   ];
   const helpMenu = [
     { label: '快捷键与使用说明', click: () => showHelp() },
+    { label: '优化启动速度（Windows Defender 排除，需管理员）', click: () => optimizeStartupSpeed() },
+    { type: 'separator' },
     { label: '关于 DeepSeek Harness 桌面版', click: () => showAbout() },
   ];
   return { fileMenu, viewMenu, helpMenu };
@@ -1049,6 +1051,37 @@ function popupMenu(menuName, rendererX, rendererY) {
     window: mainWindow,
     x: Math.round(wx + rendererX * zoom),
     y: Math.round(wy + rendererY * zoom),
+  });
+}
+
+/** 优化启动速度：把应用目录与数据目录加入 Windows Defender 排除列表
+ * （需要管理员，会弹 UAC；用户拒绝则静默失败，不影响使用）。
+ * 冷启动慢的一大原因是 Defender 实时扫描应用内的上万个小文件
+ * （dsh 的 node_modules），排除后每次启动会明显变快。 */
+function optimizeStartupSpeed() {
+  const esc = (s) => String(s).replace(/'/g, "''");
+  const script =
+    `Add-MpPreference -ExclusionPath '${esc(APP_DIR)}' -ErrorAction SilentlyContinue; ` +
+    `Add-MpPreference -ExclusionPath '${esc(WRITABLE_DIR)}' -ErrorAction SilentlyContinue`;
+  const b64 = Buffer.from(script, 'utf16le').toString('base64');
+  const ps = spawn(
+    'powershell.exe',
+    [
+      '-NoProfile', '-WindowStyle', 'Hidden', '-Command',
+      `Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile','-WindowStyle','Hidden','-EncodedCommand','${b64}' -Wait`,
+    ],
+    { windowsHide: true, stdio: 'ignore' }
+  );
+  ps.on('exit', () => {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '优化启动速度',
+      message: '已请求添加 Windows Defender 排除。',
+      detail:
+        `排除目录：\n${APP_DIR}\n${WRITABLE_DIR}\n\n` +
+        '如果刚才弹出了“用户账户控制”确认框并点了“是”，排除已生效，下次启动会明显变快。\n' +
+        '若没有生效（拒绝了管理员确认或系统策略限制），也不影响使用，只是启动稍慢。',
+    });
   });
 }
 
@@ -1106,19 +1139,24 @@ async function boot() {
 
   buildMenu();
 
-  // 先建窗口：立刻显示静态加载页（秒见），服务在后台启动。
+  // 端口探测与建窗口并行：先发起探测（不 await），窗口秒显示骨架屏，
+  // 探测结果回来时窗口已经可见，省去串行等待。
+  const probe = isPortUp(1500);
+
+  // 先建窗口：立刻显示加载页（真实界面骨架，全部显示“加载中”），服务在后台启动。
   createWindow();
   createTray();
+  setLoadingState('loading', '正在检测 dsh 服务…');
 
   // Fast path: if a dsh server is already up (e.g. left running in the
   // background from a previous session), we attach — near-instant boot.
-  const up = await isPortUp(1500);
+  const up = await probe;
   log(`boot: port ${PORT} ${up ? 'up → attach' : 'down → spawn'} (${Date.now() - bootT0}ms)`);
 
   // Spawn the server while the loading page is showing; the window then
   // loads the GUI the moment the port responds.
   if (!up) {
-    setLoadingState('loading', '正在启动 dsh 服务…');
+    setLoadingState('loading', '正在启动 dsh 服务（首次冷启动可能需要 10~30 秒）…');
     startServer();
   } else {
     setLoadingState('loading', '正在连接 dsh 服务…');
@@ -1130,7 +1168,12 @@ async function boot() {
       return;
     }
     const t0 = Date.now();
+    // 等待期间每秒刷新加载页上的“已等待 N 秒”，避免看起来像卡死。
+    const ticker = setInterval(() => {
+      setLoadingState('loading', `正在启动 dsh 服务…（已等待 ${Math.round((Date.now() - t0) / 1000)} 秒）`);
+    }, 1000);
     const ok = await waitForServer(120000);
+    clearInterval(ticker);
     log(`boot: dsh web ready in ${Date.now() - t0}ms`);
     if (!ok) {
       setLoadingState('error', 'dsh 服务启动超时，请查看 server.log');

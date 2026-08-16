@@ -75,4 +75,14 @@ FunctionEnd
   SendMessage $3 0x040A 0 0        ; PBM_SETMARQUEE off
   SendMessage $3 0x0402 100 0      ; PBM_SETPOS 100
   DetailPrint "安装完成！"
+
+  ; 冷启动提速：把安装目录与数据目录加入 Windows Defender 排除列表，
+  ; 避免实时扫描应用内的上万个文件（dsh node_modules）拖慢每次启动。
+  ; 仅管理员时有效（Add-MpPreference 需要管理员），失败静默，不影响安装。
+  UserInfo::GetAccountType
+  Pop $0
+  ${If} $0 == "admin"
+    DetailPrint "正在优化启动速度（Windows Defender 排除）…"
+    nsExec::Exec "powershell.exe -NoProfile -WindowStyle Hidden -Command $\"Add-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionPath '$APPDATA\DeepSeekHarness' -ErrorAction SilentlyContinue$\""
+  ${EndIf}
 !macroend

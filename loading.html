@@ -12,42 +12,60 @@
     color: #e8eaed;
     font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     display: flex;
+    padding-top: 40px; /* 自定义标题栏（preload 注入）占位 */
     -webkit-user-select: none; user-select: none;
     overflow: hidden;
   }
 
-  /* 左侧栏（骨架） */
+  /* 左侧栏（骨架：品牌 + 新建会话 + 会话列表，每项都带“加载中”转圈） */
   .side {
     width: 232px; flex: none;
     background: #111418;
     border-right: 1px solid rgba(255, 255, 255, 0.06);
     padding: 16px 12px;
-    display: flex; flex-direction: column; gap: 14px;
+    display: flex; flex-direction: column; gap: 12px;
   }
-  .side .brand { display: flex; align-items: center; gap: 10px; padding: 2px 4px 10px; }
+  .side .brand { display: flex; align-items: center; gap: 10px; padding: 2px 4px 8px; }
   .side .logo {
     width: 30px; height: 30px; border-radius: 8px;
     background: linear-gradient(135deg, #3964fe, #7c4dff);
     display: flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 700; color: #fff; flex: none;
   }
-  .side .brand .bt {
-    font-size: 13px; font-weight: 600; color: #e8eaed; white-space: nowrap;
+  .side .brand .bt { font-size: 13px; font-weight: 600; color: #e8eaed; white-space: nowrap; }
+  .new-session {
+    height: 36px; border-radius: 9px;
+    background: rgba(255, 255, 255, 0.05);
+    display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    color: #9aa0a6; font-size: 12.5px;
   }
-  .nav { display: flex; flex-direction: column; gap: 8px; }
-  .nav .item {
-    height: 34px; border-radius: 8px;
-    display: flex; align-items: center; gap: 10px; padding: 0 10px;
-    background: rgba(255, 255, 255, 0.035);
+  .new-session .plus {
+    width: 16px; height: 16px; border-radius: 5px;
+    background: rgba(255, 255, 255, 0.12);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #c9cdd3; flex: none;
   }
-  .nav .item .dot { width: 14px; height: 14px; border-radius: 4px; background: rgba(255,255,255,.12); flex: none; }
-  .nav .item .bar { height: 10px; border-radius: 5px; background: rgba(255,255,255,.10); }
-  .nav .item .bar.w40 { width: 40%; }
-  .nav .item .bar.w60 { width: 60%; }
+  .sess-label { font-size: 11px; color: #5f6368; padding: 6px 4px 2px; }
+  .sessions { display: flex; flex-direction: column; gap: 4px; }
+  .sess {
+    height: 46px; border-radius: 9px; padding: 0 10px;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255, 255, 255, 0.028);
+  }
+  .sess .tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+  .sess .tt .a { height: 9px; border-radius: 4px; background: rgba(255, 255, 255, 0.12); width: 82%; }
+  .sess .tt .b { height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.07); width: 55%; }
+  .sess .dots { width: 18px; height: 18px; flex: none; border-radius: 5px; background: rgba(255, 255, 255, 0.08); }
+  .sess .st {
+    width: 16px; height: 16px; flex: none; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.10);
+    border-top-color: #3964fe;
+    animation: spin 1s linear infinite;
+  }
 
-  /* 主区域（骨架） */
-  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 20px 28px; gap: 16px; }
-  .status-row { display: flex; align-items: center; gap: 12px; }
+  /* 主区（骨架：状态行 + 聊天气泡 + 输入框） */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .status-row { display: flex; align-items: center; gap: 12px; padding: 20px 28px 4px; }
   .spinner {
     width: 20px; height: 20px; flex: none;
     border-radius: 50%;
@@ -57,52 +75,55 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   #app-status { font-size: 13px; color: #9aa0a6; }
-
-  .skeleton { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
-  .skeleton .row {
-    height: 40px; border-radius: 10px;
-    background: rgba(255, 255, 255, 0.04);
-    position: relative; overflow: hidden;
+  .chat {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column; gap: 16px;
+    padding: 14px 28px; overflow: hidden;
   }
-  .skeleton .row.short { width: 55%; }
-  .skeleton .line {
-    height: 12px; border-radius: 6px;
-    background: rgba(255, 255, 255, 0.06);
-    position: relative; overflow: hidden;
-  }
-  .skeleton .line.l1 { width: 92%; }
-  .skeleton .line.l2 { width: 68%; }
-  .skeleton .line.l3 { width: 80%; }
-  .skeleton .line.l4 { width: 45%; }
-  /* 流光动画 */
-  .skeleton .row::after, .skeleton .line::after {
+  .bubble { display: flex; flex-direction: column; gap: 8px; max-width: 78%; }
+  .bubble .row { height: 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.06); position: relative; overflow: hidden; }
+  .bubble .row.l1 { width: 76%; }
+  .bubble .row.l2 { width: 88%; }
+  .bubble .row.l3 { width: 52%; }
+  .bubble.user { align-self: flex-end; align-items: flex-end; }
+  .bubble.user .row { background: rgba(57, 100, 254, 0.18); }
+  .bubble.user .l1 { width: 46%; }
+  .bubble.user .l2 { width: 32%; }
+  .bubble .row::after {
     content: ""; position: absolute; inset: 0;
-    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.07) 50%, transparent 70%);
+    background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.07) 50%, transparent 70%);
     animation: shimmer 1.4s infinite;
   }
-  .skeleton .row::after { border-radius: 10px; }
-  .skeleton .line::after { border-radius: 6px; }
   @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
-  .hint { font-size: 12px; color: #5f6368; margin-top: auto; padding-bottom: 8px; }
+  .composer {
+    margin: 0 28px 24px; height: 52px;
+    border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.09);
+    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  }
+  .composer .ph { font-size: 12.5px; color: #5f6368; flex: 1; }
+  .composer .btn { width: 60px; height: 30px; border-radius: 8px; background: rgba(255, 255, 255, 0.07); flex: none; }
+
+  .hint { font-size: 12px; color: #5f6368; padding: 4px 28px 10px; }
 
   /* 错误状态 */
   body[data-state="error"] .spinner { border-top-color: #e5484d; animation: none; }
   body[data-state="error"] #app-status { color: #f0a3a6; }
-  body[data-state="error"] .skeleton { display: none; }
+  body[data-state="error"] .chat,
+  body[data-state="error"] .composer,
+  body[data-state="error"] .hint { display: none; }
 </style>
 </head>
 <body data-state="starting">
   <div class="side">
-    <div class="brand">
-      <div class="logo">DS</div>
-      <div class="bt">DeepSeek Harness</div>
-    </div>
-    <div class="nav">
-      <div class="item"><span class="dot"></span><span class="bar w60"></span></div>
-      <div class="item"><span class="dot"></span><span class="bar w40"></span></div>
-      <div class="item"><span class="dot"></span><span class="bar w60"></span></div>
-      <div class="item"><span class="dot"></span><span class="bar w40"></span></div>
+    <div class="brand"><div class="logo">DS</div><div class="bt">DeepSeek Harness</div></div>
+    <div class="new-session"><span class="plus">＋</span>新建会话</div>
+    <div class="sess-label">会话</div>
+    <div class="sessions">
+      <div class="sess"><span class="st"></span><div class="tt"><div class="a"></div><div class="b"></div></div><span class="dots"></span></div>
+      <div class="sess"><span class="st"></span><div class="tt"><div class="a"></div><div class="b"></div></div><span class="dots"></span></div>
+      <div class="sess"><span class="st"></span><div class="tt"><div class="a"></div><div class="b"></div></div><span class="dots"></span></div>
+      <div class="sess"><span class="st"></span><div class="tt"><div class="a"></div><div class="b"></div></div><span class="dots"></span></div>
     </div>
   </div>
   <div class="main">
@@ -110,15 +131,14 @@
       <div class="spinner"></div>
       <div id="app-status">正在启动 DeepSeek Harness…</div>
     </div>
-    <div class="skeleton">
-      <div class="line l1"></div>
-      <div class="line l2"></div>
-      <div class="row short"></div>
-      <div class="line l3"></div>
-      <div class="line l4"></div>
-      <div class="row"></div>
+    <div class="chat">
+      <div class="bubble user"><div class="row l1"></div><div class="row l2"></div></div>
+      <div class="bubble"><div class="row l1"></div><div class="row l2"></div><div class="row l3"></div></div>
+      <div class="bubble user"><div class="row l1"></div></div>
+      <div class="bubble"><div class="row l1"></div><div class="row l2"></div></div>
     </div>
-    <div class="hint">会话数据加载中…</div>
+    <div class="hint">会话与消息加载中…</div>
+    <div class="composer"><span class="ph">输入消息…</span><span class="btn"></span></div>
   </div>
 </body>
 </html>
