@@ -283,6 +283,37 @@ function friendlyToolLabel(name, argsText) {
   return '';
 }
 
+/**
+ * 把系统注入的 user/message（source.kind !== 'user'）折叠成手机端友好的一句话：
+ * - /compact 检查点：长文概要 → “上下文已压缩”；
+ * - 运行时上下文快照 / 技能目录 / 审批策略等系统提示词：不倾倒全文；
+ * - 其它插件注入（后台任务通知等）：保留短文本，超长截断。
+ */
+function foldSystemMessage(text, src) {
+  const plugin = src && src.plugin ? String(src.plugin) : '';
+  const kind = src && src.kind ? String(src.kind) : '';
+  const form = src && src.form ? String(src.form) : '';
+  // 压缩上下文（/compact）落地的检查点消息是一大段
+  // “automatically generated checkpoint … <compacted-summary>…</compacted-summary>”，
+  // 手机上不需要倾倒全文，换成一句友好提示。
+  if (plugin === 'compact' || kind === 'compact' || text.includes('<compacted-summary>') || /automatically generated checkpoint/i.test(text)) {
+    return '✅ 上下文已压缩（历史已精简，对话可继续）';
+  }
+  if ((plugin === '@deepseek-ai/dsh-system-prompt' || kind === 'system-prompt') && form === 'snapshot') {
+    return '⚙️ 系统提示已更新（运行上下文快照）';
+  }
+  if (plugin === 'skill-catalog' || kind === 'skill-catalog') {
+    return '📚 可用技能目录已更新';
+  }
+  if (plugin === 'user-approval' || kind === 'user-approval') {
+    // 审批策略变化通常是短句，保留原文；超长才截断
+    return text.length > 200 ? text.slice(0, 200) + '…' : text;
+  }
+  // 其它系统注入（如 tool-jobs 后台任务通知）：保留短文本，超长截断
+  if (text.length > 200) return text.slice(0, 200) + '…';
+  return text;
+}
+
 function foldHistory(entries) {
   const out = [];
   let lastTool = null;
@@ -296,12 +327,7 @@ function foldHistory(entries) {
       // user/message（source.kind !== 'user'），这些不该显示成“用户输入”，标记为 system。
       const isRealUser = d.source && d.source.kind === 'user';
       let text = contentText(d.content);
-      // 压缩上下文（/compact）落地的检查点消息是一大段
-      // “automatically generated checkpoint … <compacted-summary>…</compacted-summary>”，
-      // 手机上不需要倾倒全文，换成一句友好提示。
-      if (text.includes('<compacted-summary>') || /automatically generated checkpoint/i.test(text)) {
-        text = '✅ 上下文已压缩（历史已精简，对话可继续）';
-      }
+      if (!isRealUser) text = foldSystemMessage(text, d.source);
       out.push({
         kind: isRealUser ? 'user' : 'system',
         text,
