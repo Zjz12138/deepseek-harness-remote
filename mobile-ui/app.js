@@ -953,14 +953,15 @@ function renderMessages(messages, opts = {}) {
       }
       if (hasText) {
         const full = m.text;
-        const seqKey = m.seq !== undefined ? m.seq : (m.time || '');
+        // 统一用字符串作 key（与点击事件的 dataset.seq 一致，Set.has 才匹配得上）
+        const seqKey = String(m.seq !== undefined ? m.seq : (m.time || ''));
         if (full.length > LONG_MSG_LIMIT && !expandedLongMsgs.has(seqKey)) {
           // 长输出（如压缩命令的完整结果）默认折叠，避免刷屏；点击可展开。
           // 折叠时仍渲染完整 markdown（CSS 高度截断），保证格式始终可见，
           // 而不是先显示纯文本预览、展开后才变成 markdown。
           parts.push(
             `<div class="bubble bubble-md msg-folded">${renderMarkdown(full)}</div>` +
-            `<button type="button" class="msg-expand" data-seq="${esc(String(seqKey))}">展开全部（${full.length} 字）</button>`
+            `<button type="button" class="msg-expand" data-seq="${esc(seqKey)}">展开全部（${full.length} 字）</button>`
           );
         } else {
           parts.push(`<div class="bubble bubble-md">${renderMarkdown(full)}</div>`);
@@ -999,11 +1000,13 @@ function renderMessages(messages, opts = {}) {
 }
 
 // 展开长消息（事件委托：消息列表会反复重渲染）
+// 注意：data-* 属性取值永远是字符串，而 seqKey 是数字 —— 这里统一转字符串再比较，
+// 否则 Set.has(数字) 永远匹配不到已加入的字符串，导致“展开全部”点了没反应。
 $('messages').addEventListener('click', (e) => {
   const btn = e.target && e.target.closest && e.target.closest('.msg-expand');
   if (!btn) return;
-  const seq = btn.dataset.seq;
-  if (seq !== undefined) expandedLongMsgs.add(seq);
+  const seq = String(btn.dataset.seq);
+  if (seq !== 'undefined') expandedLongMsgs.add(seq);
   renderMessages(chatMsgs);
 });
 
