@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "DeepSeek Harness desktop app (Electron shell) — 自带 dsh 服务与手机远程访问",
   "main": "main.js",
   "author": "DeepSeek Harness",
