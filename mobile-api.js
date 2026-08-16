@@ -387,8 +387,10 @@ async function createSession(workspaceId, cwd, agentPreset) {
   return { sessionId: value.sessionId, agentPreset: value.agentPreset };
 }
 
-/** 发送消息：无 sessionId 时先建会话（可带 agentPreset）。 */
-async function sendPrompt({ sessionId, workspaceId, cwd, text, agentPreset }) {
+/** 发送消息：无 sessionId 时先建会话（可带 agentPreset）。
+ * mode: 'queue'（默认，空闲排队）| 'steer'（插话，会话运行中把消息插入下一步，agent 优先处理）。
+ */
+async function sendPrompt({ sessionId, workspaceId, cwd, text, agentPreset, mode }) {
   const textClean = String(text || '').trim();
   if (!textClean) throw rpcError('BAD_REQUEST', '消息内容不能为空');
   if (!sessionId) {
@@ -397,10 +399,10 @@ async function sendPrompt({ sessionId, workspaceId, cwd, text, agentPreset }) {
   }
   const value = await rpc('session.prompt', {
     sessionId,
-    mode: 'queue',
+    mode: mode === 'steer' ? 'steer' : 'queue',
     content: [{ type: 'text', text: textClean }],
   });
-  return { sessionId, agentPreset: undefined, accepted: !!(value && value.accepted) };
+  return { sessionId, agentPreset: undefined, accepted: !!(value && value.accepted), steered: mode === 'steer' };
 }
 
 /** 取消正在运行的会话。 */

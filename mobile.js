@@ -401,8 +401,9 @@ async function handleApi(req, res, urlPath) {
         cwd: body.cwd,
         text: body.text,
         agentPreset: body.agentPreset,
+        mode: body.mode, // 'queue' | 'steer'（插话）
       });
-      log(`${devLabel}: send → ${result.sessionId}`);
+      log(`${devLabel}: send${body.mode === 'steer' ? ' (steer)' : ''} → ${result.sessionId}`);
       return sendJson(res, 200, result);
     }
 

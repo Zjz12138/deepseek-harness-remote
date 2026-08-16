@@ -1104,6 +1104,9 @@ function sendMessage() {
   if (currentSessionId) payload.sessionId = currentSessionId;
   else if (currentWsId) payload.workspaceId = currentWsId;
   if (!currentSessionId && currentPreset) payload.agentPreset = currentPreset; // 新建会话指定预设
+  // 会话运行中 → 插话发送（steer）：消息插入 agent 正在执行的下一步，优先处理；
+  // 空闲 → 普通排队（queue）。
+  if (currentSessionId && sessionRunning) payload.mode = 'steer';
   api('/m/send', { method: 'POST', body: JSON.stringify(payload) })
     .then((r) => {
       $('composer-input').value = '';
@@ -1111,6 +1114,7 @@ function sendMessage() {
         currentSessionId = r.sessionId;
         $('chat-title-text').textContent = '新会话';
       }
+      if (payload.mode === 'steer') toast('⏩ 已插话，agent 将优先处理');
       setTimeout(chatPoll, 300);
     })
     .catch((e) => {
@@ -1173,9 +1177,10 @@ async function updatePermChip() {
   $('chip-perm').textContent = '🔒 ' + (PERM_LABELS[currentPerm] || currentPerm || '权限');
 }
 
-/** 停止按钮：会话运行中显示，空闲时隐藏。 */
+/** 停止按钮：会话运行中显示，空闲时隐藏。发送键同时切换为“插话”。 */
 function updateStopButton() {
   $('btn-stop').style.display = sessionRunning ? 'block' : 'none';
+  $('btn-send').textContent = sessionRunning ? '插话' : '发送';
 }
 
 $('chip-agent').addEventListener('click', () => {
