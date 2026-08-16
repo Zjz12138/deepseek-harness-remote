@@ -58,6 +58,11 @@ let currentWsId = null; // 新建会话选中的工作区
 let lastSessions = { items: [] };
 let pairingInFlight = false;
 
+// 会话操作状态（输入框内的快捷切换按钮）
+let currentPerm = ''; // 当前权限模式 id（read-only / workspace-write / danger-full-access）
+let currentPresetLabel = ''; // 当前会话的 Agent 预设显示名
+let sessionRunning = false; // 当前会话是否在运行（控制停止按钮显隐）
+
 // 会话消息状态（支持上翻增量加载）
 let chatMsgs = []; // 当前会话已加载的消息（带 seq，最早在前）
 let chatHasMore = false; // 是否还有更早历史可加载
@@ -713,6 +718,38 @@ function esc(s) {
   return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ---------------------------------------------------------------------------
+// Markdown 渲染（assistant 回复）：marked 解析 + DOMPurify 消毒，输出安全 HTML。
+// 仅在两个库都可用时启用；缺失时回退为纯文本（esc）。
+// ---------------------------------------------------------------------------
+
+const MD_CACHE = new Map(); // 长文本重复渲染（轮询 3s 一次）时缓存，避免每次全量解析
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  if (MD_CACHE.has(text)) return MD_CACHE.get(text);
+  let html;
+  try {
+    if (window.marked && window.DOMPurify) {
+      const raw = window.marked.parse(text, { breaks: true, gfm: true });
+      html = window.DOMPurify.sanitize(raw, {
+        USE_PROFILES: { html: true },
+        ADD_ATTR: ['target'],
+      });
+      // 为外部链接加 target 与安全 rel（DOMPurify 默认去掉 target，这里补回来）
+      html = html.replace(/<a href="(https?:[^"]+)"/g, '<a href="$1" target="_blank" rel="noopener noreferrer"');
+    } else {
+      html = esc(text).replace(/\n/g, '<br/>');
+    }
+  } catch {
+    html = esc(text).replace(/\n/g, '<br/>');
+  }
+  // 简单 LRU：最多缓存 40 条
+  if (MD_CACHE.size > 40) MD_CACHE.clear();
+  MD_CACHE.set(text, html);
+  return html;
+}
+
 $('btn-new').addEventListener('click', openNew);
 $('btn-empty-new').addEventListener('click', openNew);
 // 设置页入口见下方 settingsPoll 区域（含加载占位）
@@ -772,6 +809,7 @@ function openChat(sessionId, title) {
   chatMsgs = [];
   chatHasMore = true;
   chatLoadingMore = false;
+  initComposerTools();
   // 先渲染本地缓存（秒开），再拉取最新增量
   const cached = readCache(sessionId);
   if (cached && cached.msgs && cached.msgs.length) {
@@ -799,8 +837,16 @@ async function chatPoll() {
     renderMessages(chatMsgs);
     writeCache(currentSessionId, chatMsgs);
     renderPending(data.pendingApprovals || [], data.pendingQuestions || []);
+    // 运行状态与输入框快捷按钮：同步一次会话列表（轻量），刷新"停止"按钮与 Agent 预设名
+    try {
+      const s = await api('/m/sessions');
+      lastSessions = s;
+    } catch {}
     const info = lastSessions.items.find((s) => s.sessionId === currentSessionId);
-    $('chat-sub').textContent = info && info.running ? '● 运行中' : '';
+    sessionRunning = !!(info && info.running);
+    if (info && info.agentPreset) updatePresetChip(info.agentPreset);
+    updateStopButton();
+    $('chat-sub').textContent = sessionRunning ? '● 运行中' : '';
   } catch (e) {
     // 会话可能刚创建；忽略瞬时错误
   }
@@ -864,7 +910,7 @@ function renderMessages(messages, opts = {}) {
     } else if (m.kind === 'user') {
       const div = document.createElement('div');
       div.className = 'msg user';
-      div.innerHTML = `<div class="bubble">${esc(m.text)}</div>`;
+      div.innerHTML = `<div class="bubble bubble-md">${renderMarkdown(m.text)}</div>`;
       box.appendChild(div);
     } else if (m.kind === 'assistant') {
       const hasReasoning = !!(m.reasoning && m.reasoning.trim());
@@ -881,13 +927,14 @@ function renderMessages(messages, opts = {}) {
         const full = m.text;
         const seqKey = m.seq !== undefined ? m.seq : (m.time || '');
         if (full.length > LONG_MSG_LIMIT && !expandedLongMsgs.has(seqKey)) {
-          // 长输出（如压缩命令的完整结果）默认折叠，避免刷屏；点击可展开
+          // 长输出（如压缩命令的完整结果）默认折叠，避免刷屏；点击可展开。
+          // 折叠预览用纯文本（截断的 markdown 可能产生残缺 HTML），展开后才是 markdown 渲染。
           parts.push(
             `<div class="bubble">${esc(full.slice(0, LONG_MSG_LIMIT))}…</div>` +
             `<button type="button" class="msg-expand" data-seq="${esc(String(seqKey))}">展开全部（${full.length} 字）</button>`
           );
         } else {
-          parts.push(`<div class="bubble">${esc(full)}</div>`);
+          parts.push(`<div class="bubble bubble-md">${renderMarkdown(full)}</div>`);
         }
       }
       div.innerHTML = parts.join('');
@@ -1091,6 +1138,75 @@ $('composer-input').addEventListener('input', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 输入框内的会话操作快捷按钮：
+//   [🤖 Agent] [🔒 权限] —— 点按弹出对应选择器；会话运行中时发送旁显示 [⏹ 停止]
+// ---------------------------------------------------------------------------
+
+let presetNameCache = {}; // preset id -> 显示名（/m/presets 返回）
+let presetCacheLoading = false;
+
+/** 拉取一次预设列表填充名称缓存（失败时静默，按钮回退显示原始 id）。 */
+async function refreshPresetCache() {
+  if (presetCacheLoading) return;
+  presetCacheLoading = true;
+  try {
+    const d = await api('/m/presets');
+    presetNameCache = {};
+    for (const p of (d.presets || [])) presetNameCache[p.id] = p.name || p.id;
+  } catch {} finally {
+    presetCacheLoading = false;
+  }
+}
+
+/** Agent 预设按钮：显示当前预设名，点按打开预设选择器。 */
+function updatePresetChip(presetId) {
+  currentPresetLabel = presetId ? (presetNameCache[presetId] || presetId) : '';
+  $('chip-agent').textContent = '🤖 ' + (currentPresetLabel || 'Agent');
+}
+
+/** 权限按钮：显示当前权限模式名，点按打开权限选择器。 */
+async function updatePermChip() {
+  try {
+    const p = await api('/m/permission');
+    currentPerm = p.current || '';
+  } catch {}
+  $('chip-perm').textContent = '🔒 ' + (PERM_LABELS[currentPerm] || currentPerm || '权限');
+}
+
+/** 停止按钮：会话运行中显示，空闲时隐藏。 */
+function updateStopButton() {
+  $('btn-stop').style.display = sessionRunning ? 'block' : 'none';
+}
+
+$('chip-agent').addEventListener('click', () => {
+  openPresetPicker(currentSessionId, (opt) => {
+    // 选择后刷新按钮文字（新会话：currentPreset；已有会话：服务端已切换）
+    if (opt && opt.id) {
+      currentPresetLabel = opt.label || presetNameCache[opt.id] || opt.id;
+      $('chip-agent').textContent = '🤖 ' + currentPresetLabel;
+    }
+  });
+});
+
+$('chip-perm').addEventListener('click', () => {
+  openPermissionPicker();
+});
+
+$('btn-stop').addEventListener('click', () => {
+  cancelChat();
+});
+
+/** 进入会话时初始化快捷按钮（每次打开会话调用一次）。 */
+function initComposerTools() {
+  sessionRunning = false;
+  updateStopButton();
+  updatePermChip();
+  refreshPresetCache();
+  const info = lastSessions.items.find((s) => s.sessionId === currentSessionId);
+  updatePresetChip(info && info.agentPreset ? info.agentPreset : '');
+}
+
+// ---------------------------------------------------------------------------
 // 斜杠命令浮层：输入 / 弹出命令菜单
 // ---------------------------------------------------------------------------
 
@@ -1254,6 +1370,8 @@ async function openPermissionPicker() {
       try {
         await api('/m/permission-set', { method: 'POST', body: JSON.stringify({ preset: opt.id }) });
         toast('已切换为「' + (PERM_LABELS[opt.id] || opt.id) + '」');
+        currentPerm = opt.id;
+        updatePermChip();
         if (currentView === 'settings') settingsPoll();
       } catch (e) { toast(e.message); }
     });
@@ -1278,9 +1396,11 @@ async function openPresetPicker(sessionId, onDone) {
         if (sessionId) {
           await api('/m/preset', { method: 'POST', body: JSON.stringify({ sessionId, agentPreset: opt.id }) });
           toast('已切换为「' + opt.label + '」');
+          updatePresetChip(opt.id);
         } else {
           currentPreset = opt.id;
           toast('新建会话将使用「' + opt.label + '」');
+          updatePresetChip(opt.id);
         }
         if (onDone) onDone();
       } catch (e) { toast(e.message); }

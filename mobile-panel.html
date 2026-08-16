@@ -265,14 +265,23 @@
       $('run-view').classList.toggle('hidden', !running);
       if (!running) return;
 
-      $('status').textContent = '运行中 · 端口 ' + state.port +
-        (tun.running
-          ? tun.ready
-            ? ' · 远程已就绪'
-            : tun.verifyFailed
-              ? ' · 远程异常（本机探测未通过）'
-              : ' · 远程连接中…'
-          : '');
+      // 已连接设备（fresh 定义见下方）先算出来，用于状态行优先显示“已连接”
+      const activeDev = (state.devices || []).find((d) => d.active);
+      const fresh = activeDev && activeDev.lastSeen && (Date.now() - activeDev.lastSeen) < 90e3;
+      const devConnected = !state.pairPending && !!activeDev && !!fresh;
+
+      let statusText = '运行中 · 端口 ' + state.port;
+      if (devConnected) {
+        // 手机已连上且工作正常 → 不再显示隧道告警（隧道仅影响远程，已连接的会话不受影响）
+        statusText += ' · 📱 已连接';
+      } else if (tun.running) {
+        statusText += tun.ready
+          ? ' · 远程已就绪'
+          : tun.verifyFailed
+            ? ' · 远程待验证（本机探测受限，扫码即可尝试）'
+            : ' · 远程连接中…';
+      }
+      $('status').textContent = statusText;
       $('status').className = 'status ok';
       $('port').value = state.port;
 
@@ -284,9 +293,7 @@
       // 已连接：显示"已连接"状态，二维码区收起（配对码已消费）
       // 注意：lastSeen 超过 90 秒未更新视为已离线（手机断网/退出 App 后不再更新），
       // 此时不显示"已连接"，避免"手机已经断了但面板一直显示已连接"的假象。
-      const activeDev = (state.devices || []).find((d) => d.active);
-      const fresh = activeDev && activeDev.lastSeen && (Date.now() - activeDev.lastSeen) < 90e3;
-      const pairedConnected = !state.pairPending && !!activeDev && !!fresh;
+      const pairedConnected = devConnected;
       $('qr-connected').style.display = pairedConnected ? 'block' : 'none';
       if (pairedConnected) $('qr-connected-name').textContent = '控制设备：' + activeDev.name;
       // 无配对码时显示“生成配对二维码”兜底按钮
@@ -341,7 +348,7 @@
       }
       showQr(entry);
       if (tun.verifyFailed) {
-        $('qr-cap').textContent = entry.label + ' ⚠ 本机探测该地址未通过（网络可能屏蔽 Cloudflare）；若手机扫码失败，请改用“同一网络”';
+        $('qr-cap').textContent = entry.label + ' ⚠ 本机探测受限（网络可能屏蔽 Cloudflare），但手机仍可扫码尝试；若失败请改用“同一网络”';
       }
       $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
       } // end: 非已连接 → 展示二维码

@@ -43,6 +43,7 @@ let saveConfig = () => {};
 let logFn = (m) => console.log('[mobile] ' + m);
 let pairConfirmHandler = null; // async (deviceName, code) => 'active' | 'view' | 'reject' | 'timeout'
 let tunnelStatus = () => null; // () => {url} | null
+let onTunnelTraffic = null; // () => void 请求经隧道地址到达时回调（证明隧道真实可用）
 
 function log(message) {
   logFn(message);
@@ -488,6 +489,20 @@ async function handleApi(req, res, urlPath) {
 
 async function handleRequest(req, res) {
   const urlPath = (req.url || '/').split('?')[0];
+  // 真实隧道流量检测：请求的 Host 与隧道公网地址一致 → 证明隧道可路由，
+  // 立即通知主进程标记“已验证”（本机探测会因网络屏蔽误报，真实流量最可靠）。
+  // 注意：cloudflared 转发时保留原始 Host（*.trycloudflare.com）。
+  try {
+    const host = String(req.headers.host || '').split(':')[0];
+    const tun = tunnelStatus();
+    if (host && tun && tun.url && onTunnelTraffic) {
+      let tunHost = '';
+      try {
+        tunHost = new URL(tun.url).hostname;
+      } catch {}
+      if (tunHost && host === tunHost) onTunnelTraffic();
+    }
+  } catch {}
   // 跨域预检（手机 App 从 https://localhost 发起带 Authorization/JSON 的请求）
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS_HEADERS);
@@ -518,6 +533,7 @@ function start(options) {
   if (typeof options.log === 'function') logFn = options.log;
   if (typeof options.pairConfirmHandler === 'function') pairConfirmHandler = options.pairConfirmHandler;
   if (typeof options.tunnelStatus === 'function') tunnelStatus = options.tunnelStatus;
+  if (typeof options.onTunnelTraffic === 'function') onTunnelTraffic = options.onTunnelTraffic;
   api.setBase(options.targetUrl || 'http://127.0.0.1:3080');
   api.startMux();
 
@@ -541,6 +557,7 @@ function start(options) {
 function stop() {
   api.stopMux();
   pendingPair = null;
+  onTunnelTraffic = null;
   if (server) {
     try {
       server.close();

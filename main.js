@@ -318,6 +318,10 @@ async function startMobileAccess() {
       log,
       pairConfirmHandler: pairConfirm,
       tunnelStatus: () => (tunnel.isRunning() && tunnel.getUrl() ? { url: tunnel.getUrl(), ready: tunnel.isReady() } : null),
+      onTunnelTraffic: () => {
+        // 手机经隧道地址真实连上本机 → 这是最可靠的“隧道可用”证据
+        if (tunnel.isRunning() && !tunnel.isReady()) tunnel.markVerified();
+      },
     });
     config.mobile.enabled = true;
     saveConfig();

@@ -171,6 +171,41 @@ button.danger {
   padding: 10px 13px; border-radius: 14px; font-size: 14px; line-height: 1.55;
   white-space: pre-wrap; word-break: break-word;
 }
+/* Markdown 渲染的气泡：内部元素用块级流式布局，不再是整体 pre-wrap */
+.bubble.bubble-md { white-space: normal; overflow-wrap: break-word; }
+.bubble-md p { margin: 4px 0; }
+.bubble-md p:first-child { margin-top: 0; }
+.bubble-md p:last-child { margin-bottom: 0; }
+.bubble-md h1, .bubble-md h2, .bubble-md h3, .bubble-md h4, .bubble-md h5, .bubble-md h6 {
+  margin: 10px 0 4px; font-size: 1.05em; font-weight: 700; line-height: 1.35;
+}
+.bubble-md h1 { font-size: 1.3em; }
+.bubble-md h2 { font-size: 1.2em; }
+.bubble-md ul, .bubble-md ol { margin: 4px 0; padding-left: 22px; }
+.bubble-md li { margin: 2px 0; }
+.bubble-md code {
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 0.88em; background: rgba(255,255,255,.09);
+  padding: 1px 5px; border-radius: 5px; word-break: break-all;
+}
+.bubble-md pre {
+  background: #0b0e13; border: 1px solid var(--line); border-radius: 9px;
+  padding: 9px 11px; margin: 6px 0; overflow-x: auto;
+}
+.bubble-md pre code { background: none; padding: 0; display: block; white-space: pre; }
+.bubble-md blockquote {
+  margin: 6px 0; padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--accent); color: var(--muted);
+}
+.bubble-md a { color: #7db0ff; text-decoration: underline; }
+.bubble-md table { border-collapse: collapse; margin: 6px 0; max-width: 100%; display: block; overflow-x: auto; }
+.bubble-md th, .bubble-md td { border: 1px solid var(--line); padding: 4px 8px; font-size: 13px; }
+.bubble-md th { background: var(--bg3); font-weight: 600; }
+.bubble-md hr { border: none; border-top: 1px solid var(--line); margin: 8px 0; }
+.bubble-md img { max-width: 100%; border-radius: 8px; }
+.bubble-md del { color: var(--muted); }
+.bubble-md strong { font-weight: 700; }
+.bubble-md em { font-style: italic; }
 .msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
 .msg.assistant .bubble { background: var(--bg2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg .reason { font-size: 11px; color: var(--dim); font-style: italic; }
@@ -193,10 +228,20 @@ button.danger {
 }
 .msg-expand:active { opacity: 0.7; }
 .composer {
-  flex: none; display: flex; gap: 8px; align-items: flex-end;
-  padding: 10px 12px calc(10px + var(--safe-b));
+  flex: none; display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 12px calc(10px + var(--safe-b));
   background: rgba(17, 20, 24, 0.95); border-top: 1px solid var(--line);
 }
+.composer-tools { display: flex; align-items: center; gap: 6px; }
+.tool-chip {
+  height: 28px; padding: 0 10px; border-radius: 999px;
+  background: var(--bg3); color: var(--muted); font-size: 12px;
+  border: 1px solid var(--line); cursor: pointer; white-space: nowrap;
+  max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+}
+.tool-chip:active { background: #2a3140; color: var(--text); }
+.tool-flex { flex: 1; }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea {
   flex: 1; min-height: 42px; max-height: 120px; resize: none;
   background: var(--bg2); color: var(--text);
@@ -209,6 +254,12 @@ button.danger {
   font-weight: 600; font-size: 14px; border-radius: 12px; flex: none;
 }
 .send-btn:disabled { opacity: 0.5; }
+.stop-send {
+  height: 42px; padding: 0 14px; background: rgba(229, 72, 77, 0.14);
+  color: #f0a3a6; border: 1px solid rgba(229, 72, 77, 0.4);
+  font-weight: 700; font-size: 15px; border-radius: 12px; flex: none;
+}
+.stop-send:active { background: rgba(229, 72, 77, 0.28); }
 
 /* ---------- settings ---------- */
 .settings-body { flex: 1; overflow-y: auto; padding: 14px 14px calc(24px + var(--safe-b)); }

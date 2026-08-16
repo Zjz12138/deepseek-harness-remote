@@ -96,8 +96,16 @@
     <button id="btn-scroll-bottom" class="scroll-bottom" style="display:none" title="回到最新">↓</button>
     <div id="cmd-popup" class="cmd-popup" style="display:none"></div>
     <footer class="composer">
-      <textarea id="composer-input" rows="1" enterkeyhint="newline" placeholder="发消息给电脑上的 agent…"></textarea>
-      <button id="btn-send" class="send-btn">发送</button>
+      <div class="composer-tools">
+        <button class="tool-chip" id="chip-agent">🤖 Agent</button>
+        <button class="tool-chip" id="chip-perm">🔒 权限</button>
+        <span class="tool-flex"></span>
+      </div>
+      <div class="composer-row">
+        <textarea id="composer-input" rows="1" enterkeyhint="newline" placeholder="发消息给电脑上的 agent…"></textarea>
+        <button id="btn-stop" class="stop-send" style="display:none" title="停止当前会话">⏹</button>
+        <button id="btn-send" class="send-btn">发送</button>
+      </div>
     </footer>
   </section>
 
@@ -162,6 +170,8 @@
   </div>
 
   <script src="./vendor/jsqr.min.js"></script>
+  <script src="./vendor/marked.umd.js"></script>
+  <script src="./vendor/purify.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

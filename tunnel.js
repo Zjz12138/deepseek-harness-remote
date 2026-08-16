@@ -33,6 +33,7 @@ let url = null;
 let ready = false;
 let verifyFailed = false;
 let stopping = false;
+let reprobeTimer = null;
 let logFn = (m) => console.log('[tunnel] ' + m);
 let onUrl = null;
 let onExit = null; // (code) => void 隧道非预期退出时回调（由主进程决定是否重启）
@@ -69,6 +70,37 @@ function isReady() {
 /** 拿到地址但探测未通过（本机网络可能屏蔽 Cloudflare）。 */
 function isVerifyFailed() {
   return verifyFailed;
+}
+
+/**
+ * 由“真实隧道流量”标记为已验证：手机端经隧道 URL 成功连上本机时调用。
+ * 本机探测会因 GFW/网络屏蔽而误报失败，但手机能连上就是最可靠的证明。
+ */
+function markVerified() {
+  if (!child || !url) return;
+  ready = true;
+  verifyFailed = false;
+  clearTimeout(reprobeTimer);
+  logFn('tunnel verified via real traffic: ' + url);
+  if (onUrl) onUrl(url);
+}
+
+/** 探测未通过时，每隔一段时间自动重试（网络恢复后自动转为已就绪）。 */
+function scheduleReprobe() {
+  if (reprobeTimer || stopping || !child || !url || ready) return;
+  reprobeTimer = setTimeout(async () => {
+    reprobeTimer = null;
+    if (!child || !url || ready) return;
+    const code = await probeStatus(url + '/auth/status', PROBE_TIMEOUT_MS);
+    if (code >= 200 && code < 500) {
+      ready = true;
+      verifyFailed = false;
+      logFn('tunnel verified by reprobe: ' + url);
+      if (onUrl) onUrl(url);
+    } else {
+      scheduleReprobe();
+    }
+  }, 20000);
 }
 
 /** curl 探测（Windows 自带 curl）：双栈 + 系统解析，对本机 trycloudflare 子域最可靠。 */
@@ -182,6 +214,7 @@ function start(port) {
           ready = ok;
           verifyFailed = !ok;
           logFn(ok ? 'tunnel verified: ' + url : 'tunnel NOT verified (network may block trycloudflare)');
+          if (!ok) scheduleReprobe(); // 本机探测受限时持续后台重试
           resolve({ url, ready, verifyFailed });
         });
       }
@@ -217,6 +250,8 @@ function start(port) {
 
 function stop() {
   stopping = true;
+  clearTimeout(reprobeTimer);
+  reprobeTimer = null;
   if (child) {
     try {
       child.kill();
@@ -234,6 +269,7 @@ module.exports = {
   isReady,
   isVerifyFailed,
   getUrl,
+  markVerified,
   start,
   stop,
   setLogger,
