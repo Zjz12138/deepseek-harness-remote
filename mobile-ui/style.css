@@ -131,6 +131,17 @@ button.danger {
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--dim); }
 .empty button { width: 160px; }
 
+/* 上下文用量指示条（会话列表行内） */
+.ctx-meter { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+.ctx-bar {
+  flex: 1; min-width: 0; height: 5px; border-radius: 3px;
+  background: var(--bg3); overflow: hidden;
+}
+.ctx-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s ease; }
+.ctx-meter.mid .ctx-fill { background: #d29922; }
+.ctx-meter.warn .ctx-fill { background: #e5484d; }
+.ctx-text { flex: none; font-size: 10px; color: var(--dim); font-family: ui-monospace, Consolas, monospace; white-space: nowrap; }
+
 /* ---------- chat ---------- */
 #pending-area { flex: none; padding: 8px 12px 0; }
 .pending-card {

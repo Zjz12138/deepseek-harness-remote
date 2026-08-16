@@ -195,7 +195,9 @@ function pendingQuestions(sessionId) {
 // 业务包装（供 mobile.js 的 HTTP 处理器调用）
 // ---------------------------------------------------------------------------
 
-/** 会话列表 → 手机 UI 用摘要（隐藏已归档会话，与桌面 GUI 行为一致）。 */
+/** 会话列表 → 手机 UI 用摘要（隐藏已归档会话，与桌面 GUI 行为一致）。
+ * 附带上下文用量（contextPressure 投影：projectedTokens/contextWindow）与
+ * 累计 token 用量（tokenUsage 投影），供手机端显示进度。 */
 async function listSessions() {
   const [sessions, workspaces] = await Promise.all([
     rpc('session.list', {}),
@@ -210,6 +212,26 @@ async function listSessions() {
       .map((s) => {
       const proj = s.projections && s.projections.values ? s.projections.values : {};
       const projTitle = proj && typeof proj.title === 'string' && proj.title ? proj.title : '';
+      // 上下文用量：桌面端同样使用 projectedTokens（无则回退 pressureTokens）
+      const pressure = proj.contextPressure || {};
+      const usedTokens = pressure.projectedTokens !== undefined ? pressure.projectedTokens : pressure.pressureTokens;
+      let context = null;
+      if (usedTokens !== undefined && pressure.contextWindow !== undefined) {
+        context = {
+          usedTokens,
+          contextWindow: pressure.contextWindow,
+          percent: Math.min(100, Math.round((usedTokens / pressure.contextWindow) * 100)),
+        };
+      }
+      // 累计 token 用量（输入=uncached+cacheRead+cacheWrite，输出=output）
+      const usage = proj.tokenUsage || {};
+      let tokens = null;
+      if (typeof usage.outputTokens === 'number' && usage.outputTokens > 0) {
+        tokens = {
+          input: (usage.uncachedInputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0),
+          output: usage.outputTokens,
+        };
+      }
       return {
         sessionId: s.sessionId,
         title: projTitle || s.title || fallbackTitle(s),
@@ -218,6 +240,8 @@ async function listSessions() {
         blank: !!s.blank,
         cwd: s.cwd || '',
         agentPreset: s.agentPreset || '',
+        context,
+        tokens,
         pendingApprovals: pendingApprovals(s.sessionId).length,
         pendingQuestions: pendingQuestions(s.sessionId).length,
       };

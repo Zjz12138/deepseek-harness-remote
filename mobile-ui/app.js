@@ -702,11 +702,26 @@ function renderSessions(items) {
     const badges = [];
     if (s.running) badges.push('<span class="badge run">运行中</span>');
     if (s.pendingApprovals || s.pendingQuestions) badges.push('<span class="badge pending">待处理</span>');
+    // 上下文用量：进度条 + 已用/上限（无数据时不显示）
+    let ctxHtml = '';
+    if (s.context && s.context.contextWindow) {
+      const pct = Math.min(100, Math.max(0, s.context.percent || 0));
+      const warn = pct >= 80 ? ' warn' : pct >= 50 ? ' mid' : '';
+      ctxHtml = `
+        <div class="ctx-meter${warn}">
+          <div class="ctx-bar"><div class="ctx-fill" style="width:${pct}%"></div></div>
+          <span class="ctx-text">${fmtTokens(s.context.usedTokens)} / ${fmtTokens(s.context.contextWindow)}</span>
+        </div>`;
+    } else if (s.tokens) {
+      // 无上下文压力数据时回退显示累计用量
+      ctxHtml = `<div class="ctx-meter"><span class="ctx-text">Σ ${fmtTokens(s.tokens.input)} in / ${fmtTokens(s.tokens.output)} out</span></div>`;
+    }
     item.innerHTML = `
       <div class="si-main">
         <div class="si-title">${esc(s.title)}</div>
         <div class="si-sub">${esc(s.cwd || '')}</div>
         <div class="si-badges">${badges.join('')}</div>
+        ${ctxHtml}
       </div>
       <div class="si-time">${fmtTime(s.updatedAt)}</div>`;
     item.addEventListener('click', () => openChat(s.sessionId, s.title));
@@ -716,6 +731,15 @@ function renderSessions(items) {
 
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/** 紧凑 token 数：517 / 12.2K / 517K / 1.2M（与桌面端 formatTokens 一致）。 */
+function fmtTokens(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '—';
+  const scaled = (v) => (v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10));
+  if (n < 1e3) return String(n);
+  if (n < 1e6) return `${scaled(n / 1e3)}K`;
+  return `${scaled(n / 1e6)}M`;
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +870,11 @@ async function chatPoll() {
     sessionRunning = !!(info && info.running);
     if (info && info.agentPreset) updatePresetChip(info.agentPreset);
     updateStopButton();
-    $('chat-sub').textContent = sessionRunning ? '● 运行中' : '';
+    const ctx = info && info.context;
+    $('chat-sub').textContent = [
+      sessionRunning ? '● 运行中' : '',
+      ctx && ctx.contextWindow ? `🧠 ${fmtTokens(ctx.usedTokens)} / ${fmtTokens(ctx.contextWindow)} (${Math.min(100, ctx.percent || 0)}%)` : '',
+    ].filter(Boolean).join(' · ');
   } catch (e) {
     // 会话可能刚创建；忽略瞬时错误
   }
