@@ -132,6 +132,14 @@
     <main class="settings-body">
       <div class="card" id="device-card"></div>
       <div class="card" id="server-card"></div>
+      <div class="card" id="theme-card">
+        <div class="card-row"><span>外观</span><span class="muted" id="theme-current">深色</span></div>
+        <div class="card-row"><span class="muted" style="font-size:12px">深色 / 浅色（白底黑字）</span></div>
+        <div class="seg" id="theme-seg" style="margin-top:10px">
+          <button data-theme-val="dark" id="seg-theme-dark">🌙 深色</button>
+          <button data-theme-val="light" id="seg-theme-light">☀️ 浅色</button>
+        </div>
+      </div>
       <div class="card" id="perm-card">
         <div class="card-row"><span>权限模式（新建会话默认）</span><span class="muted" id="perm-current">…</span></div>
         <div class="card-row"><span class="muted" style="font-size:12px">当前会话的权限请在聊天页用 🔒 按钮切换</span></div>

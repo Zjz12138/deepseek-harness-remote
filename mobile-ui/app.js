@@ -63,6 +63,34 @@ let currentPerm = ''; // 当前权限模式 id（read-only / workspace-write / d
 let currentPresetLabel = ''; // 当前会话的 Agent 预设显示名
 let sessionRunning = false; // 当前会话是否在运行（控制停止按钮显隐）
 
+// 主题（深色/浅色），持久化到 localStorage
+const LS_THEME = 'dshm_theme';
+let theme = 'dark';
+
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem(LS_THEME, theme); } catch {}
+  const cur = $('theme-current');
+  if (cur) cur.textContent = theme === 'light' ? '浅色' : '深色';
+  const darkBtn = $('seg-theme-dark');
+  const lightBtn = $('seg-theme-light');
+  if (darkBtn) darkBtn.classList.toggle('on', theme !== 'light');
+  if (lightBtn) lightBtn.classList.toggle('on', theme === 'light');
+}
+
+function initTheme() {
+  try {
+    const saved = localStorage.getItem(LS_THEME);
+    if (saved === 'light' || saved === 'dark') theme = saved;
+  } catch {}
+  applyTheme();
+}
+
+function toggleTheme() {
+  theme = theme === 'light' ? 'dark' : 'light';
+  applyTheme();
+}
+
 // 会话消息状态（支持上翻增量加载）
 let chatMsgs = []; // 当前会话已加载的消息（带 seq，最早在前）
 let chatHasMore = false; // 是否还有更早历史可加载
@@ -1557,6 +1585,10 @@ $('btn-settings').addEventListener('click', () => {
 
 $('btn-settings-back').addEventListener('click', () => showView('home'));
 
+// --- 主题切换（设置页：深色 / 浅色） ---
+$('seg-theme-dark').addEventListener('click', () => { theme = 'dark'; applyTheme(); });
+$('seg-theme-light').addEventListener('click', () => { theme = 'light'; applyTheme(); });
+
 $('about-version').textContent = 'v' + APP_VERSION;
 
 $('btn-disconnect').addEventListener('click', () => {
@@ -1570,5 +1602,6 @@ $('btn-disconnect').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('load', () => {
+  initTheme(); // 先应用主题，避免浅色/深色切换后闪烁
   boot().catch((err) => showFatalError('启动失败：' + (err && err.message ? err.message : err)));
 });
