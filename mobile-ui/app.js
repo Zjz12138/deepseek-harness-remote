@@ -956,9 +956,10 @@ function renderMessages(messages, opts = {}) {
         const seqKey = m.seq !== undefined ? m.seq : (m.time || '');
         if (full.length > LONG_MSG_LIMIT && !expandedLongMsgs.has(seqKey)) {
           // 长输出（如压缩命令的完整结果）默认折叠，避免刷屏；点击可展开。
-          // 折叠预览用纯文本（截断的 markdown 可能产生残缺 HTML），展开后才是 markdown 渲染。
+          // 折叠时仍渲染完整 markdown（CSS 高度截断），保证格式始终可见，
+          // 而不是先显示纯文本预览、展开后才变成 markdown。
           parts.push(
-            `<div class="bubble">${esc(full.slice(0, LONG_MSG_LIMIT))}…</div>` +
+            `<div class="bubble bubble-md msg-folded">${renderMarkdown(full)}</div>` +
             `<button type="button" class="msg-expand" data-seq="${esc(String(seqKey))}">展开全部（${full.length} 字）</button>`
           );
         } else {
@@ -1348,10 +1349,22 @@ function sendRaw(text) {
 async function cancelChat() {
   if (!currentSessionId) return;
   try {
+    // 立即反馈并乐观更新按钮状态（不等下一次轮询），避免“点了没反应”
+    $('btn-stop').style.display = 'none';
+    toast('已发送停止请求…');
     await api('/m/cancel', { method: 'POST', body: JSON.stringify({ sessionId: currentSessionId }) });
-    toast('已发送停止请求');
-    setTimeout(chatPoll, 400);
-  } catch (e) { toast(e.message); }
+    toast('已停止');
+    sessionRunning = false;
+    updateStopButton();
+    // 稍等再拉一次，确认 agent 真的停下（取消是异步的，可能需要一两秒）
+    setTimeout(chatPoll, 600);
+    setTimeout(chatPoll, 2200);
+  } catch (e) {
+    toast('停止失败：' + e.message);
+    sessionRunning = false;
+    updateStopButton();
+    setTimeout(chatPoll, 600);
+  }
 }
 
 // ---------------------------------------------------------------------------

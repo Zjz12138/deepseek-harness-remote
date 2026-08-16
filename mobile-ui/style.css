@@ -184,6 +184,12 @@ button.danger {
 }
 /* Markdown 渲染的气泡：内部元素用块级流式布局，不再是整体 pre-wrap */
 .bubble.bubble-md { white-space: normal; overflow-wrap: break-word; }
+/* 折叠的长消息：CSS 高度截断（仍保留 markdown 渲染），点击展开后恢复完整内容 */
+.msg-folded { max-height: 190px; overflow: hidden; position: relative; }
+.msg-folded::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48px;
+  background: linear-gradient(transparent, var(--bg2)); pointer-events: none;
+}
 .bubble-md p { margin: 4px 0; }
 .bubble-md p:first-child { margin-top: 0; }
 .bubble-md p:last-child { margin-bottom: 0; }
