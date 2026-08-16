@@ -473,7 +473,8 @@ async function selectAgentPreset(sessionId, agentPreset) {
   return { sessionId, agentPreset: value && value.agentPreset };
 }
 
-/** 当前权限模式（defaultPreset: read-only | workspace-write | danger-full-access）。 */
+/** 当前权限模式（defaultPreset: read-only | workspace-write | danger-full-access）。
+ * 这是“全局默认”，决定新建会话的初始权限（对应桌面端 设置 → 权限 行）。 */
 async function getPermission() {
   const value = await rpc('settings.describe', {});
   const perm = (value.namespaces || []).find((n) => n.ns === 'permission');
@@ -489,7 +490,7 @@ async function getPermission() {
   };
 }
 
-/** 修改权限模式。 */
+/** 修改全局默认权限模式。 */
 async function setPermission(preset, expectedRevision) {
   const value = await rpc('settings.mutate', {
     ns: 'permission',
@@ -498,6 +499,34 @@ async function setPermission(preset, expectedRevision) {
   });
   const perm = value && value.namespaces ? (value.namespaces.find((n) => n.ns === 'permission') || {}) : (value || {});
   return { current: perm.value && perm.value.defaultPreset, ok: true };
+}
+
+/**
+ * 当前会话的权限模式（会话级，对应桌面端聊天里的 /permission 弹层）。
+ * 数据来自 session.list 行的 permissions 投影（options + currentValue）。
+ */
+async function getSessionPermission(sessionId) {
+  if (!sessionId) throw rpcError('BAD_REQUEST', '缺少 sessionId');
+  const value = await rpc('session.list', {});
+  const s = (Array.isArray(value.items) ? value.items : []).find((x) => x.sessionId === sessionId);
+  const proj = s && s.projections && s.projections.values ? s.projections.values : {};
+  const perm = proj.permissions;
+  if (!perm || !Array.isArray(perm.options)) throw rpcError('NOT_FOUND', '该会话没有权限模式');
+  return {
+    current: perm.currentValue || '',
+    options: perm.options.map((o) => (typeof o === 'string' ? o : o && o.value)),
+  };
+}
+
+/** 切换当前会话的权限模式：执行 /permission <preset> 斜杠命令（与桌面端同一数据源）。 */
+async function setSessionPermission(sessionId, preset) {
+  if (!sessionId || !preset) throw rpcError('BAD_REQUEST', '缺少 sessionId 或 preset');
+  const value = await rpcAgentScoped('commands/execute', { agentId: sessionId, line: `/permission ${preset}` });
+  const r = value && value.result;
+  if (!r || r.kind === 'error') {
+    throw rpcError('COMMAND_FAILED', (r && r.text) || '切换权限失败');
+  }
+  return { current: preset, ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +606,8 @@ module.exports = {
   selectAgentPreset,
   getPermission,
   setPermission,
+  getSessionPermission,
+  setSessionPermission,
   listCommands,
   executeCommand,
 };

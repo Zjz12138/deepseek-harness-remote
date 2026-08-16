@@ -447,6 +447,11 @@ async function handleApi(req, res, urlPath) {
     }
 
     if (req.method === 'GET' && urlPath === '/m/permission') {
+      // 支持会话级权限：?sessionId=xxx 时返回该会话的权限（与桌面端聊天里的 /permission 一致）；
+      // 不传 sessionId 时返回全局默认（新建会话的初始权限，对应桌面端设置页）。
+      const u = new URL(req.url, 'http://local');
+      const sessionId = u.searchParams.get('sessionId') || '';
+      if (sessionId) return sendJson(res, 200, await api.getSessionPermission(sessionId));
       return sendJson(res, 200, await api.getPermission());
     }
 
@@ -454,8 +459,11 @@ async function handleApi(req, res, urlPath) {
       if (!requireActive(req, res, auth)) return;
       const body = await readJson(req);
       if (!body.preset) return sendJson(res, 400, { error: '缺少 preset' });
-      const result = await api.setPermission(body.preset, body.expectedRevision);
-      log(`${devLabel}: permission → ${body.preset}`);
+      // 会话级：执行 /permission <preset>（与桌面端一致）；全局：改 defaultPreset 设置。
+      const result = body.sessionId
+        ? await api.setSessionPermission(body.sessionId, body.preset)
+        : await api.setPermission(body.preset, body.expectedRevision);
+      log(`${devLabel}: permission${body.sessionId ? ' [session]' : ' [global]'} → ${body.preset}`);
       return sendJson(res, 200, result);
     }
 

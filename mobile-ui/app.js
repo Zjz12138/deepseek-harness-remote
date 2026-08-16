@@ -1196,10 +1196,12 @@ function updatePresetChip(presetId) {
   $('chip-agent').textContent = '🤖 ' + (currentPresetLabel || 'Agent');
 }
 
-/** 权限按钮：显示当前权限模式名，点按打开权限选择器。 */
+/** 权限按钮：显示当前权限模式名，点按打开权限选择器。
+ * 聊天页显示当前会话的权限；设置页显示全局默认。 */
 async function updatePermChip() {
   try {
-    const p = await api('/m/permission');
+    const q = currentSessionId ? `?sessionId=${encodeURIComponent(currentSessionId)}` : '';
+    const p = await api('/m/permission' + q);
     currentPerm = p.current || '';
   } catch {}
   $('chip-perm').textContent = '🔒 ' + (PERM_LABELS[currentPerm] || currentPerm || '权限');
@@ -1222,7 +1224,8 @@ $('chip-agent').addEventListener('click', () => {
 });
 
 $('chip-perm').addEventListener('click', () => {
-  openPermissionPicker();
+  // 聊天页：当前会话权限；新建会话（无 sessionId）前：全局默认
+  openPermissionPicker(currentSessionId);
 });
 
 $('btn-stop').addEventListener('click', () => {
@@ -1391,21 +1394,34 @@ const PERM_DESCS = {
   'danger-full-access': '允许 Agent 执行任意操作（含危险命令），请谨慎',
 };
 
-async function openPermissionPicker() {
+/**
+ * 打开权限选择器。
+ * @param sessionId 可选：传入则操作“当前会话的权限”（与桌面端聊天里的 /permission 一致，
+ *   数据源是会话级 permissions 投影）；不传则操作“全局默认”（新建会话的初始权限，设置页）。
+ */
+async function openPermissionPicker(sessionId) {
   try {
-    const p = await api('/m/permission');
-    openSheet('权限模式（电脑文件访问级别）', p.options.map((id) => ({
+    const q = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+    const p = await api('/m/permission' + q);
+    const title = sessionId ? '权限模式（当前会话）' : '权限模式（新建会话默认）';
+    openSheet(title, p.options.map((id) => ({
       id,
       label: PERM_LABELS[id] || id,
       desc: PERM_DESCS[id] || '',
       selected: id === p.current,
     })), async (opt) => {
       try {
-        await api('/m/permission-set', { method: 'POST', body: JSON.stringify({ preset: opt.id }) });
+        const body = { preset: opt.id };
+        if (sessionId) body.sessionId = sessionId;
+        await api('/m/permission-set', { method: 'POST', body: JSON.stringify(body) });
         toast('已切换为「' + (PERM_LABELS[opt.id] || opt.id) + '」');
-        currentPerm = opt.id;
-        updatePermChip();
-        if (currentView === 'settings') settingsPoll();
+        if (sessionId) {
+          currentPerm = opt.id;
+          updatePermChip();
+          setTimeout(chatPoll, 400); // 会话权限投影变化后刷新
+        } else if (currentView === 'settings') {
+          settingsPoll();
+        }
       } catch (e) { toast(e.message); }
     });
   } catch (e) { toast(e.message); }
@@ -1444,18 +1460,18 @@ async function openPresetPicker(sessionId, onDone) {
 // --- 会话操作菜单（⋮） ---
 $('btn-chat-settings').addEventListener('click', () => {
   const opts = [
-    { id: 'permission', label: '权限模式', desc: '电脑文件访问级别（含完全访问）' },
+    { id: 'permission', label: '权限模式', desc: '当前会话的电脑文件访问级别（含完全访问）' },
     { id: 'preset', label: 'Agent 预设', desc: '模型与推理等级（仅新会话可切换）' },
   ];
   if (currentSessionId) opts.push({ id: 'cancel', label: '停止当前会话', desc: '取消正在运行的任务' });
   openSheet('会话操作', opts, (opt) => {
-    if (opt.id === 'permission') openPermissionPicker();
+    if (opt.id === 'permission') openPermissionPicker(currentSessionId);
     else if (opt.id === 'preset') openPresetPicker(currentSessionId);
     else if (opt.id === 'cancel') cancelChat();
   });
 });
 
-// --- 设置页：权限模式入口 ---
+// --- 设置页：权限模式入口（全局默认，新建会话的初始权限） ---
 $('perm-card').addEventListener('click', () => {
   openPermissionPicker();
 });
@@ -1499,7 +1515,7 @@ async function settingsPoll() {
       <div class="card-row"><span class="muted">电脑</span><span class="muted">${esc(st.serverName || 'DeepSeek Harness')}</span></div>`;
     try {
       const perm = await api('/m/permission');
-      $('perm-current').textContent = PERM_LABELS[perm.current] || perm.current || '—';
+      $('perm-current').textContent = (PERM_LABELS[perm.current] || perm.current || '—') + '（新建会话默认）';
     } catch { $('perm-current').textContent = '—'; }
     const rows = [];
     if (st.activeDevice) rows.push(`<div class="card-row"><span class="muted">当前控制设备</span><span>${esc(st.activeDevice.name)}</span></div>`);
