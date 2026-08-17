@@ -76,13 +76,23 @@ FunctionEnd
   SendMessage $3 0x0402 100 0      ; PBM_SETPOS 100
   DetailPrint "安装完成！"
 
-  ; 冷启动提速：把安装目录与数据目录加入 Windows Defender 排除列表，
+  ; 冷启动提速（可选）：把安装目录加入 Windows Defender 排除列表，
   ; 避免实时扫描应用内的上万个文件（dsh node_modules）拖慢每次启动。
-  ; 仅管理员时有效（Add-MpPreference 需要管理员），失败静默，不影响安装。
+  ; 由用户在安装时明确选择（默认推荐“是”）；需要管理员权限，
+  ; 非管理员安装时通过 UAC 二次提升执行（会多弹一次 UAC，正常现象）。
+  MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON1 "是否添加 Windows Defender 排除以加速启动？$\r$\n$\r$\n排除后冷启动可从十几秒提速到几秒（推荐）。$\r$\n仅排除应用安装目录，卸载时会自动移除，不影响系统安全。$\r$\n（需要管理员权限，可能弹出 UAC 确认）" IDYES dshDoExcl IDNO dshSkipExcl
+  Goto dshSkipExcl
+  dshDoExcl:
+    DetailPrint "正在优化启动速度（Windows Defender 排除）…"
+    nsExec::Exec "powershell.exe -NoProfile -WindowStyle Hidden -Command $\"Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList '-NoProfile','-WindowStyle','Hidden','-Command','Add-MpPreference -ExclusionPath ''$INSTDIR'' -ErrorAction SilentlyContinue'$\""
+  dshSkipExcl:
+!macroend
+
+!macro customUnInstall
+  ; 卸载时移除安装时添加的 Defender 排除（若仍在），不留残留。
   UserInfo::GetAccountType
   Pop $0
   ${If} $0 == "admin"
-    DetailPrint "正在优化启动速度（Windows Defender 排除）…"
-    nsExec::Exec "powershell.exe -NoProfile -WindowStyle Hidden -Command $\"Add-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionPath '$APPDATA\DeepSeekHarness' -ErrorAction SilentlyContinue$\""
+    nsExec::Exec "powershell.exe -NoProfile -WindowStyle Hidden -Command $\"Remove-MpPreference -ExclusionPath '$INSTDIR' -ErrorAction SilentlyContinue$\""
   ${EndIf}
 !macroend
