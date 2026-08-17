@@ -824,11 +824,15 @@ function createWindow() {
     },
   });
 
+  // 立即显示窗口"框"：不等 ready-to-show（首次绘制完成）。冷启动时渲染
+  // 进程/GPU 初始化可能耗时数秒，若等首次绘制，窗口会迟迟不出现。这里先
+  // 恢复最大化、立即 show（backgroundColor 与 loading.html 背景一致，显示
+  // 纯色框不会白屏闪烁），骨架屏内容随后异步渲染出来。
+  if (winState.maximized) mainWindow.maximize();
+  mainWindow.show();
   mainWindow.loadFile(LOADING_PATH);
   mainWindow.once('ready-to-show', () => {
-    if (winState.maximized) mainWindow.maximize();
     sendWinState();
-    mainWindow.show();
   });
 
   mainWindow.on('resize', () => {
@@ -1140,6 +1144,12 @@ function showHelp() {
 
 async function boot() {
   const bootT0 = Date.now();
+
+  // 1) 第一步就建窗口并立即显示"框"（骨架屏内容异步渲染），把磁盘初始化 /
+  //    菜单 / 端口探测都放到窗口显示之后，让首帧出现时间最短。
+  createWindow();
+  log(`boot: window shown in ${Date.now() - bootT0}ms`);
+
   try {
     fs.mkdirSync(WRITABLE_DIR, { recursive: true });
     if (IS_PACKAGED) fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -1147,15 +1157,12 @@ async function boot() {
   } catch {}
 
   buildMenu();
-
-  // 端口探测与建窗口并行：先发起探测（不 await），窗口秒显示骨架屏，
-  // 探测结果回来时窗口已经可见，省去串行等待。
-  const probe = isPortUp(1500);
-
-  // 先建窗口：立刻显示加载页（真实界面骨架，全部显示“加载中”），服务在后台启动。
-  createWindow();
   createTray();
   setLoadingState('loading', '正在检测 dsh 服务…');
+
+  // 端口探测与窗口显示并行：先发起探测（不 await），窗口秒显示骨架屏，
+  // 探测结果回来时窗口已经可见，省去串行等待。
+  const probe = isPortUp(1500);
 
   // Fast path: if a dsh server is already up (e.g. left running in the
   // background from a previous session), we attach — near-instant boot.

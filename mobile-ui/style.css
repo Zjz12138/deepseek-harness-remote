@@ -14,6 +14,7 @@
   --warn: #d29922;
   --radius: 14px;
   --tb-h: 52px;
+  --topbar-bg: rgba(17, 20, 24, 0.92);
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
@@ -32,6 +33,7 @@
   --good: #1f8a4c;
   --bad: #d33a40;
   --warn: #a6790a;
+  --topbar-bg: rgba(255, 255, 255, 0.94);
 }
 :root[data-theme="light"] body { background: var(--bg); }
 :root[data-theme="light"] {
@@ -64,7 +66,7 @@ body {
   display: flex; align-items: center; gap: 6px;
   padding: 0 12px;
   padding-top: env(safe-area-inset-top, 0px);
-  background: rgba(17, 20, 24, 0.92);
+  background: var(--topbar-bg);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(8px);
   flex: none;
