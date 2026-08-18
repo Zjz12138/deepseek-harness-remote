@@ -9,6 +9,9 @@
  *      `dsh-open-session-dir` 自定义事件（detail.path = 会话 cwd），
  *      由桌面端 preload.js 接收并调起系统资源管理器。
  *   2. 会话节点透传 cwd 字段（原先只用于分组/标题，未带到行菜单）。
+ *   3. 工作区（侧边栏项目行）三点菜单新增「打开文件夹」（menu.openWorkspaceDir）：
+ *      复用同一个 dsh-open-session-dir 事件（detail.path = 工作区目录），桌面端
+ *      preload.js 收到后调起系统资源管理器；浏览器里无监听者，静默忽略。
  *
  * 幂等：检测到补丁标记（"dsh-desktop patch" 注释）即跳过。
  * 用法：node apply-dsh-ui-patches.js [client.js 路径...]（缺省自动探测）。
@@ -48,7 +51,16 @@ const REPLACEMENTS = [
     `\t\t\t\t\t\t\t\t\tif (id === "rename") onRename(node.id, row.title);`,
     `\t\t\t\t\t\t\t\t\tif (id === "openDir") onOpenDir?.(node.id, node.cwd);\n\t\t\t\t\t\t\t\t\tif (id === "rename") onRename(node.id, row.title);`
   ],
-  // 3) SessionTree 签名 + 传参
+  // 3) 工作区（侧边栏项目行）菜单加“打开文件夹”项（含 dsh-desktop patch 标记）
+  [
+    `\t\t\tconst workspaceMenuItems = [{\n\t\t\t\tid: "rename",\n\t\t\t\tlabel: t("rename"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})\n\t\t\t}, {\n\t\t\t\tid: "delete",\n\t\t\t\tlabel: t("delete.workspace"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),\n\t\t\t\tdanger: true\n\t\t\t}];`,
+    `\t\t\tconst workspaceMenuItems = [{\n\t\t\t\tid: "openDir",\n\t\t\t\tlabel: t("menu.openWorkspaceDir"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderOpenOutline16, {})\n\t\t\t}, {\n\t\t\t\tid: "rename",\n\t\t\t\tlabel: t("rename"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})\n\t\t\t}, {\n\t\t\t\tid: "delete",\n\t\t\t\tlabel: t("delete.workspace"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),\n\t\t\t\tdanger: true\n\t\t\t}];`
+  ],
+  [
+    `\t\t\t\t\t\t\tonSelect: (id) => {\n\t\t\t\t\t\t\t\tsetMenuOpen(false);\n\t\t\t\t\t\t\t\t/* v8 ignore next -- workspaceMenuItems carries exactly these two rows today. */\n\t\t\t\t\t\t\t\tif (id !== "rename" && id !== "delete") return;\n\t\t\t\t\t\t\t\tif (id === "rename") actions.rename();\n\t\t\t\t\t\t\t\telse actions.delete();\n\t\t\t\t\t\t\t},`,
+    `\t\t\t\t\t\t\tonSelect: (id) => {\n\t\t\t\t\t\t\t\tsetMenuOpen(false);\n\t\t\t\t\t\t\t\t// dsh-desktop patch: 工作区菜单“打开文件夹”→ 复用会话的 dsh-open-session-dir 事件\n\t\t\t\t\t\t\t\tif (id === "openDir") {\n\t\t\t\t\t\t\t\t\tif (row.cwd) {\n\t\t\t\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\t\t\t\twindow.dispatchEvent(new CustomEvent("dsh-open-session-dir", { detail: { path: row.cwd } }));\n\t\t\t\t\t\t\t\t\t\t} catch {}\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (id !== "rename" && id !== "delete") return;\n\t\t\t\t\t\t\t\tif (id === "rename") actions.rename();\n\t\t\t\t\t\t\t\telse actions.delete();\n\t\t\t\t\t\t\t},`
+  ],
+  // 4) SessionTree 签名 + 传参
   [
     `function SessionTree({ useSessions, startSession, open, forkSession, workspaces, archivedSessionIds, onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t }) {`,
     `function SessionTree({ useSessions, startSession, open, forkSession, workspaces, archivedSessionIds, onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive, onOpenDir, insertWorkspaceBefore, insertSessionBefore, orderBy, groupExpansion, setGroupExpanded, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t }) {`
@@ -87,6 +99,15 @@ const REPLACEMENTS = [
   [
     `"menu.fork": "Fork session",\n\t\t\t"menu.archiveSession": "Archive session",`,
     `"menu.fork": "Fork session",\n\t\t\t"menu.archiveSession": "Archive session",\n\t\t\t"menu.openSessionDir": "Open session folder",`
+  ],
+  // 7) 工作区“打开文件夹”翻译键（zh + en，跟在上面 openSessionDir 键之后）
+  [
+    `\t\t\t"menu.openSessionDir": "打开会话目录",`,
+    `\t\t\t"menu.openSessionDir": "打开会话目录",\n\t\t\t"menu.openWorkspaceDir": "打开文件夹",`
+  ],
+  [
+    `\t\t\t"menu.openSessionDir": "Open session folder",`,
+    `\t\t\t"menu.openSessionDir": "Open session folder",\n\t\t\t"menu.openWorkspaceDir": "Open workspace folder",`
   ],
 ];
 
