@@ -267,6 +267,12 @@
       const tun = state.tunnel || {};
       $('start-view').style.display = running ? 'none' : 'block';
       $('run-view').classList.toggle('hidden', !running);
+
+      // 设备列表：必须在所有提前 return 之前渲染 —— 否则“移除设备”后若遇到
+      // 隧道连接中/未就绪/无二维码等分支提前返回，列表会停留在删除前的旧状态
+      // （看着像没删掉，其实已删除，重开面板即消失）。
+      renderDevices(state.devices || []);
+
       if (!running) return;
 
       // 已连接设备（fresh 定义见下方）先算出来，用于状态行优先显示“已连接”
@@ -360,8 +366,17 @@
       $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
       } // end: 非已连接 → 展示二维码
 
-      // 设备列表
-      const devs = state.devices || [];
+      // 设备列表已上移为 renderDevices()（refresh 最前面调用），见下方函数定义
+
+      // 高级设置：隧道状态
+      $('tunnel-switch').classList.toggle('on', !!tun.running);
+      $('tunnel-url-wrap').classList.toggle('hidden', !tun.url);
+      if (tun.url) $('tunnel-url').textContent = tun.url;
+    }
+
+    /** 渲染已配对设备列表。refresh() 最前面调用：删除/切换设备后立即更新，
+     * 不被二维码区（隧道连接中/无二维码等）的提前 return 卡住。 */
+    function renderDevices(devs) {
       $('devices-empty').style.display = devs.length ? 'none' : 'block';
       $('devices').innerHTML = '';
       for (const d of devs) {
@@ -387,11 +402,6 @@
         });
         $('devices').appendChild(item);
       }
-
-      // 高级设置：隧道状态
-      $('tunnel-switch').classList.toggle('on', !!tun.running);
-      $('tunnel-url-wrap').classList.toggle('hidden', !tun.url);
-      if (tun.url) $('tunnel-url').textContent = tun.url;
     }
 
     function flash(btn, text) {
