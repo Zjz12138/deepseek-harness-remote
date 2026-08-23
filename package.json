@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win",
-    "postinstall": "node apply-dsh-picker-fix.js && node install-open-dir-plugin.js"
+    "postinstall": "node apply-dsh-picker-fix.js && node install-open-dir-plugin.js && node apply-nsis-progress-fix.js"
   },
   "devDependencies": {
     "electron": "^43.4.0",
@@ -44,7 +44,7 @@
     "productName": "DeepSeek Harness",
     "asar": false,
     "npmRebuild": false,
-    "compression": "maximum",
+    "compression": "store",
     "directories": {
       "output": "release"
     },
@@ -94,6 +94,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "DeepSeek Harness",
       "include": "installer.nsh",
+      "warningsAsErrors": false,
       "artifactName": "DeepSeek-Harness-${version}-Setup.exe"
     },
     "portable": {
