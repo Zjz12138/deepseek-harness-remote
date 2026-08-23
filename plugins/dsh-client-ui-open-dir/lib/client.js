@@ -18,41 +18,34 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		//#endregion
-		//#region lib/types/client/locales.js
-		/** `openDir` namespace dictionaries. */
-		const zh = {
-			"open.dir": "打开文件夹",
-			"open.dir.label": "打开当前工作区文件夹"
-		};
-		const en = {
-			"open.dir": "Open folder",
-			"open.dir.label": "Open current workspace folder"
-		};
+		//#region dsh-desktop: 按钮文案（occupant 组件没有稳定 t seat，直接按语言硬编码）
+		const zh = typeof navigator !== "undefined" && /^zh/i.test(navigator.language || "");
+		const OPEN_DIR_LABEL = zh ? "打开当前工作区文件夹" : "Open current workspace folder";
+		const OPEN_DIR_TEXT = zh ? "打开文件夹" : "Open folder";
 		//#endregion
 		//#region lib/types/client/index.js
-		const NS = "openDir";
 		/** Services required by this plugin. */
-		const inject = ["slots", "sessions", "locale"];
+		const inject = ["slots", "sessions"];
 		/**
-		 * Sidebar footer action button: opens the current workspace folder on the
-		 * host machine. The button only needs to read state at click time, so it
-		 * stays a plain component fed a closure over the client ctx.
+		 * Sidebar footer action button: opens the current session's workspace
+		 * folder on the host machine. The button only needs to read state at
+		 * click time, so it stays a plain component fed a closure over ctx.
 		 */
 		function FooterButton(props) {
-			const { wide, openDir, t } = props;
+			const { wide, openDir } = props;
 			return react_jsx_runtime.jsx(_primitives.Tooltip, {
-				label: t("open.dir.label"),
+				label: OPEN_DIR_LABEL,
 				delayMs: 500,
 				disabled: wide,
 				children: react_jsx_runtime.jsx("button", {
 					type: "button",
 					className: "dshOpenDirBtn" + (wide ? " dshOpenDirBtnWide" : ""),
-					"aria-label": t("open.dir.label"),
-					title: t("open.dir.label"),
+					"aria-label": OPEN_DIR_LABEL,
+					title: OPEN_DIR_LABEL,
 					onClick: openDir,
 					children: [
 						react_jsx_runtime.jsx(_primitives.IconFolderOpenOutline16, { size: wide ? 14 : 18 }),
-						wide && react_jsx_runtime.jsx("span", { children: t("open.dir") })
+						wide && react_jsx_runtime.jsx("span", { children: OPEN_DIR_TEXT })
 					]
 				})
 			});
@@ -71,22 +64,27 @@ window.__ModuleLoader__.load({
 				}
 			} catch {}
 		}
-		/** Registers the sidebar footer contribution. */
+		/**
+		 * Client plugin body: contribute into the sidebar footer action list slot.
+		 * The occupant pattern (per dsh-client-ui-directory-picker-native):
+		 *   - slots.inject(<declared slot name>, generator) waits for the slot
+		 *     declaration (the sidebar entry) to exist, then runs the registration;
+		 *   - slots.register's `name` MUST be the already-declared slot name
+		 *     ("sidebar.footer.action"), never a fresh name — registering a new
+		 *     name that no parent children table declares fails with
+		 *     'slot "…" is not declared'.
+		 */
 		function apply(ctx) {
-			ctx.effect(() => ctx.locale.register(NS, { zh, en }), "open-dir: dictionaries");
-			ctx.effect(() => ctx.slots.register({
-				name: "dsh-client-ui-open-dir",
-				locale: NS,
-				children: {
-					"sidebar.footer.action": {
-						kind: "list",
-						scope: "root"
-					}
-				},
-				inject: () => ({
-					openDir: () => openCurrentWorkspaceDir(ctx)
-				})
-			}, FooterButton), "open-dir: slot registration");
+			ctx.slots.inject("sidebar.footer.action", function* () {
+				yield ctx.slots.register({
+					name: "sidebar.footer.action",
+					// kind "list" slot 的 occupant 必须带 id（在列表里标识自己）
+					id: "dsh-client-ui-open-dir",
+					inject: () => ({
+						openDir: () => openCurrentWorkspaceDir(ctx)
+					})
+				}, FooterButton);
+			});
 		}
 		//#endregion
 		exports.apply = apply;
