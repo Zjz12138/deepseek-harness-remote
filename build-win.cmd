@@ -16,5 +16,8 @@ set "HTTP_PROXY="
 set "HTTPS_PROXY="
 set "ALL_PROXY="
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
+rem 打包前强制把自研插件（plugins/）拷进 node_modules，防止 postinstall 未执行/
+rem file: 依赖符号链接失败留下空壳，打出带空插件目录的安装包
+call node install-open-dir-plugin.js || exit /b 1
 call node_modules\.bin\electron-builder.cmd --win --config.directories.output=release-new %*
 exit /b %ERRORLEVEL%
