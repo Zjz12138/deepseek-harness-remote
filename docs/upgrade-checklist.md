@@ -54,3 +54,14 @@
 - [ ] `node --check` 全部自研脚本；三份副本同步（node_modules / release / 用户实例）。
 - [ ] 构建新 Setup；保留上一版 Setup 可回退。
 - [ ] 用户安装后：确认 profile 写入（自研插件 entry）幂等、不破坏既有配置。
+
+## 8. rc.6 → rc.2 实测记录（2026-08-23）
+
+- **网格版本**：19 个直接依赖 `^0.1.0-rc.6` → `^0.1.1-rc.2`；npm `latest` 标签是旧的（0.0.1-rc.1），必须显式写版本号，不能用 `@latest`。
+- **视觉**：`dsh-llm-deepseek@0.1.1-rc.2` 原生支持视觉（`inputModalities` 动态读取 + `image_url` base64 + 内置 `deepseek-v4-flash-vision-exp`）；rc.6 的适配器写死 text-only（这是"不支持图片"的根因）。
+- **settings.yaml**：自定 `models` 条目必须显式 `inputModalities: [text, image]`，否则默认回落 text-only；schemastery `z.object` 容忍未知字段（旧版 dsh 也能安全加载新配置）。
+- **UI 补丁**：`apply-dsh-ui-patches.js`（行菜单打开文件夹/会话目录）已删除，改为 `dsh-client-ui-open-dir` client 插件（侧边栏 `sidebar.footer.action`）；四份 `client.js` 还原为上游纯净版（hash 校验）。
+- **picker-fix**：rc.2 上游**未修复** `readUtf16` 盲读崩溃，`apply-dsh-picker-fix.js` 必须保留（postinstall 自动打，原版含 bug 模式可被脚本识别）。
+- **插件注入**：桌面端 `main.js` 启动时把 `dsh-client-ui-open-dir` 链接进 `$DSH_HOME/profiles/node_modules`（junction）并幂等加入 web profile 的 `dsh.profile.bundles`；attach 已运行实例时本次不生效，下次 dsh 重启生效。
+- **client-modules 注入格式**：rc.2 的 `window.__DSH_BOOT__` 用 `window["__DSH_BOOT__"] = {...}`（方括号语法），调试脚本注意格式。
+- **npm 安装**：全量重装（删 node_modules）时 CPU 满核解析依赖树是正常现象（几分钟），不是卡死；元数据 `cache hit` 不等于包文件已下载。
