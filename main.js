@@ -1139,6 +1139,60 @@ function showHelp() {
 }
 
 // ---------------------------------------------------------------------------
+// 自研 client 插件注入（侧边栏"打开文件夹"）
+// ---------------------------------------------------------------------------
+
+/** 解析 dsh home（尊重 $DSH_HOME，默认 ~/.dsh）。 */
+function resolveDshHome() {
+  const env = process.env.DSH_HOME;
+  if (env && env.trim()) return path.resolve(env.trim());
+  return path.join(os.homedir(), '.dsh');
+}
+
+/**
+ * 把自研插件（dsh-client-ui-open-dir）接入 dsh：
+ * 1) 链接/拷贝到 $DSH_HOME/profiles/node_modules/，让 dsh 从 profile 解析到该包；
+ * 2) 把插件 bundle 幂等地加进 web profile 的 dsh.profile.bundles。
+ * 任意一步失败只记日志，不阻塞启动（attach 已运行实例时本次不生效，下次 dsh 重启生效）。
+ */
+function ensureOpenDirPluginInjected() {
+  try {
+    const home = resolveDshHome();
+    const src = path.join(APP_DIR, 'node_modules', 'dsh-client-ui-open-dir');
+    if (!fs.existsSync(path.join(src, 'package.json'))) {
+      log('open-dir plugin not bundled (missing node_modules/dsh-client-ui-open-dir)');
+      return;
+    }
+    const profilesNodeModules = path.join(home, 'profiles', 'node_modules');
+    fs.mkdirSync(profilesNodeModules, { recursive: true });
+    const link = path.join(profilesNodeModules, 'dsh-client-ui-open-dir');
+    // 总是重建（junction 只删链接本身，不跟目标）：应用升级后自动指向新安装目录。
+    fs.rmSync(link, { recursive: true, force: true });
+    try {
+      fs.symlinkSync(src, link, 'junction');
+      log('open-dir plugin linked: ' + link);
+    } catch {
+      fs.cpSync(src, link, { recursive: true });
+      log('open-dir plugin copied: ' + link);
+    }
+    const manifestPath = path.join(home, 'profiles', 'web', 'package.json');
+    if (!fs.existsSync(manifestPath)) return;
+    const raw = fs.readFileSync(manifestPath, 'utf8').replace(/^\uFEFF/, '');
+    const manifest = JSON.parse(raw);
+    const bundles = (manifest.dsh && manifest.dsh.profile && manifest.dsh.profile.bundles) || [];
+    if (!bundles.includes('dsh-client-ui-open-dir')) {
+      manifest.dsh = manifest.dsh || {};
+      manifest.dsh.profile = manifest.dsh.profile || {};
+      manifest.dsh.profile.bundles = [...bundles, 'dsh-client-ui-open-dir'];
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+      log('open-dir plugin bundle added to web profile');
+    }
+  } catch (err) {
+    log('open-dir plugin inject failed (non-fatal): ' + err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
 
@@ -1149,6 +1203,9 @@ async function boot() {
   //    菜单 / 端口探测都放到窗口显示之后，让首帧出现时间最短。
   createWindow();
   log(`boot: window shown in ${Date.now() - bootT0}ms`);
+
+  // 自研 client 插件注入（幂等）：在探测/启动 dsh 之前完成，spawn 场景本次生效。
+  ensureOpenDirPluginInjected();
 
   try {
     fs.mkdirSync(WRITABLE_DIR, { recursive: true });
