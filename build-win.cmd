@@ -17,8 +17,5 @@ set "HTTP_PROXY="
 set "HTTPS_PROXY="
 set "ALL_PROXY="
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
-rem Force-copy the local plugin into node_modules before packaging so a
-rem missing postinstall / failed file: symlink can never ship an empty shell.
-call node "%~dp0install-open-dir-plugin.js" || exit /b 1
 call "%~dp0node_modules\.bin\electron-builder.cmd" --win --config.directories.output=release-new %*
 exit /b %ERRORLEVEL%

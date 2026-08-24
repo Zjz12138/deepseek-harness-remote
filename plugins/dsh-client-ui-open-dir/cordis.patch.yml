@@ -1,7 +1,0 @@
-# dsh-desktop 自研 bundle：侧边栏"打开当前工作区文件夹"。
-# 作为 profile bundles 的最后一层 apply；insert 自己的 entry，
-# entry 的包名从已安装宿主（resources/app/node_modules）解析。
-
-- insert:
-    - id: open-dir
-      name: dsh-client-ui-open-dir
