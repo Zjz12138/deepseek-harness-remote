@@ -160,6 +160,34 @@ button.danger {
 .badge.run { background: rgba(63, 185, 80, 0.15); color: var(--good); }
 .badge.pending { background: rgba(210, 153, 34, 0.15); color: var(--warn); }
 .si-time { font-size: 11px; color: var(--dim); flex: none; }
+/* 会话行右侧：隐藏/取消隐藏开关 + 时间 */
+.si-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.si-eye {
+  width: 30px; height: 30px; border: none; border-radius: 50%;
+  background: var(--bg3); color: var(--muted); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex: none;
+}
+.si-eye:active { background: var(--bg); }
+.si-eye.locked { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+/* 隐私模式下隐藏会话的样式（子行右侧为 🔒，左侧做视觉区分） */
+.session-item.hidden-item { border-color: rgba(210, 153, 34, 0.45); }
+.badge.priv { background: rgba(210, 153, 34, 0.16); color: var(--warn); }
+
+/* 首页隐私提示条：进入隐私模式后显示，含一键退出 */
+.privacy-banner {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  margin: 8px 12px 0; padding: 9px 12px;
+  background: rgba(210, 153, 34, 0.12); border: 1px solid rgba(210, 153, 34, 0.35);
+  border-radius: var(--radius); color: var(--warn); font-size: 12px;
+}
+.privacy-banner .pb-label { font-weight: 700; flex: none; }
+.privacy-banner .pb-hint { flex: 1; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.privacy-banner .pb-exit {
+  flex: none; height: 30px; padding: 0 12px; border: 1px solid rgba(210, 153, 34, 0.5);
+  background: transparent; color: #f0a75a; font-size: 12px; border-radius: 8px; white-space: nowrap;
+}
+.privacy-banner .pb-exit:active { background: rgba(210, 153, 34, 0.18); }
+
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--dim); }
 .empty button { width: 160px; }
 
@@ -175,11 +203,18 @@ button.danger {
 .ctx-text { flex: none; font-size: 10px; color: var(--dim); font-family: ui-monospace, Consolas, monospace; white-space: nowrap; }
 
 /* ---------- chat ---------- */
-#pending-area { flex: none; padding: 8px 12px 0; }
+/* 问题/审批卡片内联进消息流（可滚动），不再常驻消息列表上方 */
 .pending-card {
   background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.35);
-  border-radius: 12px; padding: 12px 14px; margin-bottom: 8px;
+  border-radius: 12px; padding: 12px 14px; margin: 8px 0;
 }
+.q-pager { display: flex; align-items: center; gap: 10px; margin: 8px 0 10px; }
+.q-pager .q-prev, .q-pager .q-next {
+  flex: 1; height: 36px; font-size: 13px; border-radius: 8px;
+  background: transparent; color: var(--accent); border: 1px solid var(--line);
+}
+.q-pager .q-prev:disabled, .q-pager .q-next:disabled { opacity: .4; }
+.q-pager .q-page { flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .pending-card h4 { font-size: 13px; margin-bottom: 6px; }
 .pending-card .p-text { font-size: 12px; color: var(--muted); margin-bottom: 10px; word-break: break-all; }
 .pending-card .p-actions { display: flex; gap: 8px; }
@@ -201,6 +236,33 @@ button.danger {
 .scroll-bottom:active { opacity: .75; }
 .msg { margin-bottom: 12px; display: flex; flex-direction: column; }
 .msg.user { align-items: flex-end; }
+/* 本地发送气泡状态（发送中转圈 / 已发送 / 失败） */
+.pending-out { position: relative; }
+.out-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; margin-top: 5px; color: var(--muted);
+}
+.out-status.sending { color: #6f9eff; }
+.out-status.sent { color: #2ecc8f; }
+.out-status.fail { color: #ff6b6b; }
+.out-images { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.out-images .ap-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
+.spin {
+  width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.25);
+  border-top-color: currentColor; border-radius: 50%;
+  animation: outspin .7s linear infinite; display: inline-block;
+}
+@keyframes outspin { to { transform: rotate(360deg); } }
+/* chat-sub 里的 agent 状态（思考中 / 接收信息中） */
+.agent-state { color: #6f9eff; font-weight: 600; }
+/* 对话流末尾的 agent 运行状态占位行（接收信息中/思考中），居中弱化显示 */
+.msg.agent-status { align-items: center; }
+.agent-line {
+  max-width: 92%; font-size: 12px; color: #6f9eff;
+  background: rgba(111,158,255,.12); border: 1px solid rgba(111,158,255,.3);
+  border-radius: 999px; padding: 5px 14px; text-align: center; word-break: break-all;
+  display: inline-block;
+}
 .msg.system { align-items: center; }
 .msg.system .sys-line {
   max-width: 92%;
@@ -291,6 +353,18 @@ button.danger {
 }
 .tool-chip:active { background: #2a3140; color: var(--text); }
 .tool-flex { flex: 1; }
+.attach-preview { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0; }
+.ap-item {
+  position: relative; flex: none; width: 64px; height: 64px;
+  border-radius: 10px; overflow: hidden; border: 1px solid var(--line);
+}
+.ap-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ap-remove {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px;
+  border-radius: 50%; background: rgba(0, 0, 0, 0.62); color: #fff;
+  font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  border: none; cursor: pointer;
+}
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea {
   flex: 1; min-height: 42px; max-height: 120px; resize: none;
@@ -405,6 +479,15 @@ button.danger {
 .po-name { font-size: 14px; font-weight: 600; }
 .po-desc { font-size: 11px; color: var(--pop-dim, #8a93a6); }
 
+/* 新建会话：以隐藏会话创建开关 */
+.priv-new-toggle {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 16px 18px; padding: 10px 12px;
+  background: rgba(210, 153, 34, 0.10); border: 1px solid rgba(210, 153, 34, 0.35);
+  border-radius: 10px; color: var(--warn); font-size: 13px; cursor: pointer;
+}
+.priv-new-toggle input { width: 18px; height: 18px; accent-color: var(--warn); }
+
 /* 会话设置卡片 */
 #perm-card { cursor: pointer; }
 #perm-card:active { background: rgba(255,255,255,.04); }
@@ -418,8 +501,34 @@ button.danger {
 }
 .q-opt:active { background: rgba(59,130,246,.15); border-color: #3b82f6; }
 .qo-label { font-size: 15px; font-weight: 600; }
+/* 自定义回答输入（选项之外的自由输入） */
+.q-custom { display: flex; gap: 8px; margin: 6px 0 10px; }
+.q-custom-input {
+  flex: 1; min-width: 0; height: 40px; padding: 0 12px;
+  background: var(--bg2, #141821); color: var(--text, #e5e7eb);
+  border: 1px solid var(--pop-line, rgba(255,255,255,.10)); border-radius: 10px;
+  font-size: 14px; font-family: inherit; outline: none;
+}
+.q-custom-input:focus { border-color: #3b82f6; }
+.q-custom-send {
+  flex: none; height: 40px; padding: 0 14px; border-radius: 10px;
+  background: var(--accent, #3b82f6); color: #fff; font-size: 13px; font-weight: 600;
+  border: none; cursor: pointer; white-space: nowrap;
+}
 .qo-desc { font-size: 12px; color: var(--pop-dim, #8a93a6); }
 .question-card h4 { margin-bottom: 2px; }
+/* 多子问题组：子问题之间分隔线 */
+.q-sub + .q-sub { border-top: 1px dashed var(--pop-line, rgba(255,255,255,.12)); padding-top: 12px; margin-top: 12px; }
+/* 已选中选项高亮（多选/单选预览） */
+.q-opt.q-opt-sel { border-color: #3b82f6; background: rgba(59,130,246,.18); }
+.q-opt.q-opt-sel .qo-label { color: #dbeafe; }
+/* 跳过本题 / 提交答案 / 放弃整组 按钮 */
+.q-skip { background: transparent; color: var(--muted); border: 1px solid var(--pop-line, rgba(255,255,255,.12)); }
+.q-skip:active { background: rgba(255,255,255,.06); }
+.q-submit { background: var(--good, #16a34a); color: #fff; }
+.q-submit:active { opacity: .8; }
+.q-dismiss { background: transparent; color: var(--muted); border: 1px solid var(--pop-line, rgba(255,255,255,.12)); }
+.q-dismiss:active { background: rgba(255,255,255,.06); }
 
 /* assistant 推理行 */
 .reason { font-size: 12px; color: var(--pop-dim, #7c8698); font-style: italic; padding: 2px 0 4px; }

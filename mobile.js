@@ -44,6 +44,8 @@ let logFn = (m) => console.log('[mobile] ' + m);
 let pairConfirmHandler = null; // async (deviceName, code) => 'active' | 'view' | 'reject' | 'timeout'
 let tunnelStatus = () => null; // () => {url} | null
 let onTunnelTraffic = null; // () => void 请求经隧道地址到达时回调（证明隧道真实可用）
+let getPrivacy = () => ({ hidden: [] }); // () => {hidden:[...]} 共享"隐藏会话"列表
+let setPrivacy = () => {}; // (next)=>next 写共享"隐藏会话"列表
 
 function log(message) {
   logFn(message);
@@ -409,8 +411,9 @@ async function handleApi(req, res, urlPath) {
         text: body.text,
         agentPreset: body.agentPreset,
         mode: body.mode, // 'queue' | 'steer'（插话）
+        images: body.images, // base64 data URL 数组（vision 输入）
       });
-      log(`${devLabel}: send${body.mode === 'steer' ? ' (steer)' : ''} → ${result.sessionId}`);
+      log(`${devLabel}: send${body.mode === 'steer' ? ' (steer)' : ''}${body.images && body.images.length ? ' (+' + body.images.length + ' img)' : ''} → ${result.sessionId}`);
       return sendJson(res, 200, result);
     }
 
@@ -430,12 +433,36 @@ async function handleApi(req, res, urlPath) {
       return sendJson(res, 200, result);
     }
 
+    if (req.method === 'POST' && urlPath === '/m/cancel-question') {
+      if (!requireActive(req, res, auth)) return;
+      const body = await readJson(req);
+      const result = await api.cancelQuestion(body.sessionId, body.questionRpcId);
+      log(`${devLabel}: dismissed question group ${body.questionRpcId}`);
+      return sendJson(res, 200, result);
+    }
+
     if (req.method === 'POST' && urlPath === '/m/cancel') {
       if (!requireActive(req, res, auth)) return;
       const body = await readJson(req);
       const result = await api.cancelSession(body.sessionId);
       log(`${devLabel}: cancel ${body.sessionId}`);
       return sendJson(res, 200, result);
+    }
+
+    // --- 隐私隐藏会话（与桌面端共享同一份列表） ---
+
+    if (req.method === 'GET' && urlPath === '/m/hidden') {
+      const state = getPrivacy();
+      return sendJson(res, 200, { hidden: Array.isArray(state.hidden) ? state.hidden.filter((x) => typeof x === 'string') : [] });
+    }
+
+    if (req.method === 'POST' && urlPath === '/m/hidden') {
+      if (!requireActive(req, res, auth)) return;
+      const body = await readJson(req);
+      const hidden = Array.isArray(body.hidden) ? body.hidden.filter((x) => typeof x === 'string') : [];
+      setPrivacy({ hidden });
+      log(`${devLabel}: privacy hidden set -> ${hidden.length}`);
+      return sendJson(res, 200, { ok: true, hidden });
     }
 
     // --- 会话能力扩展：Agent 预设（模型/推理等级）与权限模式 ---
@@ -450,6 +477,26 @@ async function handleApi(req, res, urlPath) {
       if (!body.sessionId || !body.agentPreset) return sendJson(res, 400, { error: '缺少 sessionId 或 agentPreset' });
       const result = await api.selectAgentPreset(body.sessionId, body.agentPreset);
       log(`${devLabel}: preset ${body.sessionId} → ${body.agentPreset}`);
+      return sendJson(res, 200, result);
+    }
+
+    // --- 模型选择（会话内：与桌面端 /model 弹窗同一数据源） ---
+
+    if (req.method === 'GET' && urlPath === '/m/models') {
+      const u = new URL(req.url, 'http://local');
+      const sessionId = u.searchParams.get('sessionId') || '';
+      if (!sessionId) return sendJson(res, 400, { error: '缺少 sessionId' });
+      const result = await api.listModels(sessionId);
+      log(`${devLabel}: models list ${sessionId}`);
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === 'POST' && urlPath === '/m/select-model') {
+      if (!requireActive(req, res, auth)) return;
+      const body = await readJson(req);
+      if (!body.sessionId || !body.selection) return sendJson(res, 400, { error: '缺少 sessionId 或 selection' });
+      const result = await api.selectModel(body.sessionId, body.selection);
+      log(`${devLabel}: select-model ${body.sessionId} → ${body.selection.provider}/${body.selection.model}`);
       return sendJson(res, 200, result);
     }
 
@@ -553,6 +600,8 @@ function start(options) {
   if (typeof options.pairConfirmHandler === 'function') pairConfirmHandler = options.pairConfirmHandler;
   if (typeof options.tunnelStatus === 'function') tunnelStatus = options.tunnelStatus;
   if (typeof options.onTunnelTraffic === 'function') onTunnelTraffic = options.onTunnelTraffic;
+  if (typeof options.getPrivacy === 'function') getPrivacy = options.getPrivacy;
+  if (typeof options.setPrivacy === 'function') setPrivacy = options.setPrivacy;
   api.setBase(options.targetUrl || 'http://127.0.0.1:3080');
   api.startMux();
 
@@ -564,12 +613,12 @@ function start(options) {
     };
     const onListen = () => {
       server.removeListener('error', onErr);
-      log(`手机访问已启用: 0.0.0.0:${server.address().port} (mode=${mode})`);
+      log(`手机访问已启用: [::]:${server.address().port} (mode=${mode}, IPv4+IPv6 双栈)`);
       resolve();
     };
     server.once('error', onErr);
     server.once('listening', onListen);
-    server.listen(port, '0.0.0.0');
+    server.listen(port, '::');
   });
 }
 
@@ -621,9 +670,18 @@ function getState() {
 }
 
 /** 手机 UI 的局域网访问地址（不含隧道）。 */
+/** 2000::/3 全局单播地址（排除 link-local fe80、ULA fc/fd、loopback ::1）。 */
+function isGlobalV6(addr) {
+  const g = String(addr || '').split(':')[0] || '';
+  if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return false;
+  const n = parseInt(g, 16);
+  return n >= 0x2000 && n <= 0x3fff;
+}
+
 function urls() {
   const p = isRunning() ? getPort() : port;
   const out = [];
+  const ipv6 = [];
   const ifaces = os.networkInterfaces();
   const entries = Object.entries(ifaces).sort(([a], [b]) => {
     const rank = (n) => (/wlan|wi-fi|wireless/i.test(n) ? 0 : /ethernet|以太网|lan/i.test(n) ? 1 : 2);
@@ -632,10 +690,15 @@ function urls() {
   for (const [name, list] of entries) {
     if (/vEthernet|wsl|virtualbox|hyper-v|vmware|docker|loopback/i.test(name)) continue;
     for (const i of list || []) {
-      if (i.family === 'IPv4' && !i.internal && i.address) out.push(`http://${i.address}:${p}`);
+      if (i.family === 'IPv4' && !i.internal && i.address) {
+        out.push(`http://${i.address}:${p}`);
+      } else if (i.family === 'IPv6' && !i.internal && i.address && isGlobalV6(i.address)) {
+        // 全局 IPv6：跨网络也能直连（走公网 IPv6，无需隧道中转）
+        ipv6.push(`http://[${i.address}]:${p}`);
+      }
     }
   }
-  return [...new Set(out)];
+  return [...new Set(out.concat(ipv6))];
 }
 
 module.exports = {

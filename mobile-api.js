@@ -43,12 +43,17 @@ async function rpc(method, payload) {
   } catch (err) {
     throw rpcError('DSH_UNREACHABLE', 'dsh 服务不可用（' + err.message + '）');
   }
-  if (!res.ok) throw rpcError('DSH_TRANSPORT', `dsh 传输错误 HTTP ${res.status}`);
+  if (!res.ok) {
+    // 带出方法名与 HTTP 状态码：手机端可弹窗显示“dsh RPC 失败: <method> (HTTP 404)”。
+    const bodyText = await res.text().catch(() => '');
+    const detail = bodyText ? ` · ${bodyText.slice(0, 200)}` : '';
+    throw rpcError('DSH_TRANSPORT', `dsh RPC 失败: ${method} (HTTP ${res.status})${detail}`);
+  }
   const env = await res.json();
   if (env.rpcId !== rpcId) throw rpcError('DSH_PROTO', 'dsh 协议错误（rpcId 不匹配）');
   if (!env.result || !env.result.ok) {
     const e = env.result && env.result.error ? env.result.error : { message: 'unknown' };
-    throw rpcError(String(e.code || 'DSH_RPC'), String(e.message || 'dsh 调用失败'), e);
+    throw rpcError(String(e.code || 'DSH_RPC'), `dsh 调用失败: ${method} — ${String(e.message || 'unknown')}`, e);
   }
   return env.result.value;
 }
@@ -71,25 +76,33 @@ async function rpcAgentScoped(method, args) {
   } catch (err) {
     throw rpcError('DSH_UNREACHABLE', 'dsh 服务不可用（' + err.message + '）');
   }
-  if (!res.ok) throw rpcError('DSH_TRANSPORT', `dsh 传输错误 HTTP ${res.status}`);
+  if (!res.ok) {
+    // 带出方法名与 HTTP 状态码：手机端可弹窗显示“dsh RPC 失败: <method> (HTTP 404)”。
+    const bodyText = await res.text().catch(() => '');
+    const detail = bodyText ? ` · ${bodyText.slice(0, 200)}` : '';
+    throw rpcError('DSH_TRANSPORT', `dsh RPC 失败: ${method} (HTTP ${res.status})${detail}`);
+  }
   const env = await res.json();
   if (env.rpcId !== rpcId) throw rpcError('DSH_PROTO', 'dsh 协议错误（rpcId 不匹配）');
   if (!env.result || !env.result.ok) {
     const e = env.result && env.result.error ? env.result.error : { message: 'unknown' };
-    throw rpcError(String(e.code || 'DSH_RPC'), String(e.message || 'dsh 调用失败'), e);
+    throw rpcError(String(e.code || 'DSH_RPC'), `dsh 调用失败: ${method} — ${String(e.message || 'unknown')}`, e);
   }
   return env.result.value;
 }
 
-/** 应答 dsh 的待批准请求（工具调用审批 / 问题回答）。 */
-async function respond(method, payload) {
-  const rpcId = crypto.randomUUID();
+/** 发送一个已构造好的 client-response 结果对象（{ok:true,value} 或 {ok:false,error}）。 */
+async function respondResult(result, rpcId) {
+  const id = rpcId || crypto.randomUUID();
   let res;
   try {
     res = await fetch(`${baseUrl}/api/respond`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-response', rpcId, method, payload }),
+      // 服务端把 body 当 client-response 信封解析（clientResponseSchema = {type,rpcId,result}），
+      // result 必须是 {ok:true,value} 或 {ok:false,error}；旧的 {method,payload} 顶层会被判成
+      // bad-response。路由按 rpcId 命中 pending 项，与 method 无关。
+      body: JSON.stringify({ type: 'client-response', rpcId: id, result }),
       signal: AbortSignal.timeout(15000),
     });
   } catch (err) {
@@ -97,6 +110,14 @@ async function respond(method, payload) {
   }
   if (!res.ok) throw rpcError('DSH_TRANSPORT', `respond 传输错误 HTTP ${res.status}`);
   return res.json();
+}
+
+/** 应答 dsh 的待批准请求（工具调用审批 / 问题回答）。
+ * rpcId 传服务端 mux 帧 envelope 的 rpcId：服务端 /api/respond 正是按这个键
+ * 路由到对应 pending 项的，缺了或随机都会命中不了 → accepted:false。
+ */
+async function respond(method, payload, rpcId) {
+  return respondResult({ ok: true, value: payload }, rpcId);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,20 +139,24 @@ function handleMuxFrame(full) {
   if (p.type === 'approval/requested') {
     let list = live.pendingApprovals.get(p.sessionId) || [];
     if (!list.some((a) => a.approvalId === p.approvalId)) {
-      list.push({ approvalId: p.approvalId, toolName: p.toolName, callId: p.callId, reason: p.reason });
+      // rpcId 是服务端 envelope 顶层的应答路由键：应答时必须原样回传，服务端才能路由到该待审批项。
+      list.push({ rpcId: full && full.rpcId, approvalId: p.approvalId, toolName: p.toolName, callId: p.callId, reason: p.reason });
       live.pendingApprovals.set(p.sessionId, list);
     }
   } else if (p.type === 'approval/resolved') {
     const list = (live.pendingApprovals.get(p.sessionId) || []).filter((a) => a.approvalId !== p.approvalId);
     live.pendingApprovals.set(p.sessionId, list);
   } else if (p.type === 'question/requested') {
+    // dsh 的 question/requested 帧里 item 的标识在 envelope 顶层 rpcId（而非 payload）。
+    // 存下这个 rpcId：既是去重键，也是应答 /api/respond 时服务端用来路由到该问题的键。
+    const rpcId = full && full.rpcId;
     let list = live.pendingQuestions.get(p.sessionId) || [];
-    if (!list.some((q) => q.questionRpcId === p.questionRpcId)) {
-      list.push({ questionRpcId: p.questionRpcId, questions: p.questions });
+    if (!list.some((q) => q.rpcId === rpcId)) {
+      list.push({ rpcId, questionRpcId: rpcId, questions: p.questions });
       live.pendingQuestions.set(p.sessionId, list);
     }
   } else if (p.type === 'question/resolved') {
-    const list = (live.pendingQuestions.get(p.sessionId) || []).filter((q) => q.questionRpcId !== p.questionRpcId);
+    const list = (live.pendingQuestions.get(p.sessionId) || []).filter((q) => q.rpcId !== p.questionRpcId && q.questionRpcId !== p.questionRpcId);
     live.pendingQuestions.set(p.sessionId, list);
   } else if (p.type === 'session/event') {
     live.lastEventSeqs.set(p.sessionId, p.event.seq);
@@ -240,6 +265,7 @@ async function listSessions() {
         blank: !!s.blank,
         cwd: s.cwd || '',
         agentPreset: s.agentPreset || '',
+        origin: s.origin || '', // 'subagent'：子智能体会话，手机端列表默认隐藏
         context,
         tokens,
         pendingApprovals: pendingApprovals(s.sessionId).length,
@@ -413,18 +439,34 @@ async function createSession(workspaceId, cwd, agentPreset) {
 
 /** 发送消息：无 sessionId 时先建会话（可带 agentPreset）。
  * mode: 'queue'（默认，空闲排队）| 'steer'（插话，会话运行中把消息插入下一步，agent 优先处理）。
+ * images: 可选，base64 data URL 数组（如 data:image/jpeg;base64,...），作为 vision 输入附加到消息。
  */
-async function sendPrompt({ sessionId, workspaceId, cwd, text, agentPreset, mode }) {
+async function sendPrompt({ sessionId, workspaceId, cwd, text, agentPreset, mode, images }) {
   const textClean = String(text || '').trim();
-  if (!textClean) throw rpcError('BAD_REQUEST', '消息内容不能为空');
+  const hasImages = Array.isArray(images) && images.length > 0;
+  if (!textClean && !hasImages) throw rpcError('BAD_REQUEST', '消息内容不能为空');
   if (!sessionId) {
     const created = await createSession(workspaceId, cwd, agentPreset);
     sessionId = created.sessionId;
   }
+  const content = [];
+  if (textClean) content.push({ type: 'text', text: textClean });
+  for (const img of images) {
+    // dsh 的 session.prompt 图片块格式：{ type: 'image', mediaType, data(base64 纯串), name? }。
+    // 手机端传 data URL（如 data:image/jpeg;base64,...），这里拆成 mediaType + 纯 base64。
+    if (typeof img === 'string' && /^data:image\//.test(img)) {
+      const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]*)$/.exec(img);
+      if (match) {
+        content.push({ type: 'image', mediaType: match[1], data: match[2] });
+      }
+    } else if (img && typeof img.data === 'string' && img.mediaType) {
+      content.push({ type: 'image', mediaType: img.mediaType, data: img.data });
+    }
+  }
   const value = await rpc('session.prompt', {
     sessionId,
     mode: mode === 'steer' ? 'steer' : 'queue',
-    content: [{ type: 'text', text: textClean }],
+    content,
   });
   return { sessionId, agentPreset: undefined, accepted: !!(value && value.accepted), steered: mode === 'steer' };
 }
@@ -437,14 +479,44 @@ async function cancelSession(sessionId) {
 
 /** 应答工具调用审批：outcome = 'allowed-once' | 'rejected'。 */
 async function answerApproval(sessionId, approvalId, outcome) {
-  const receipt = await respond('approvals.respond', { sessionId, approvalId, outcome });
-  return { accepted: !!(receipt && receipt.accepted) };
+  // 从 mux 缓存里找该审批项的 envelope rpcId 回传，服务端按它路由到 pending。
+  const item = (live.pendingApprovals.get(sessionId) || []).find((a) => a.approvalId === approvalId);
+  const receipt = await respond('approvals.respond', { sessionId, approvalId, outcome }, item && item.rpcId);
+  const accepted = !!(receipt && receipt.accepted);
+  // 兜底：应答成功即从本地缓存移除该审批项（不依赖 resolved 帧到达）；
+  // 否则桌面端/服务端已处理但手机端仍残留“待处理”。
+  if (accepted && live.pendingApprovals.has(sessionId)) {
+    live.pendingApprovals.set(sessionId, (live.pendingApprovals.get(sessionId) || []).filter((a) => a.approvalId !== approvalId));
+  }
+  return { accepted };
 }
 
 /** 回答问题（ask_user_question）。若协议不被接受会抛错，由调用方提示去电脑端回答。 */
 async function answerQuestion(sessionId, questionRpcId, answers) {
-  const receipt = await respond('userQuestions.answer', { sessionId, questionRpcId, answers });
-  return { accepted: !!(receipt && receipt.accepted) };
+  // 问题项的 envelope rpcId 在 mux 缓存里（requested 帧时已存下），回传给服务端才能命中 pending。
+  const item = (live.pendingQuestions.get(sessionId) || []).find((q) => q.rpcId === questionRpcId || q.questionRpcId === questionRpcId);
+  const receipt = await respond('userQuestions.answer', { sessionId, answer: { answers } }, item && item.rpcId);
+  const accepted = !!(receipt && receipt.accepted);
+  // 兜底：应答成功即从本地缓存移除该问题项（不依赖 resolved 帧到达），
+  // 彻底解决“手机端点取消/回答后，待处理弹窗仍关不掉”。
+  if (accepted && live.pendingQuestions.has(sessionId)) {
+    live.pendingQuestions.set(sessionId, (live.pendingQuestions.get(sessionId) || []).filter((q) => q.rpcId !== questionRpcId && q.questionRpcId !== questionRpcId));
+  }
+  return { accepted };
+}
+
+/** 放弃整组问题（对应桌面端“放弃整组问题/取消”）：以 cancelled 收尾，让 ask_user_question 工具调用被取消。 */
+async function cancelQuestion(sessionId, questionRpcId) {
+  const item = (live.pendingQuestions.get(sessionId) || []).find((q) => q.rpcId === questionRpcId || q.questionRpcId === questionRpcId);
+  const receipt = await respondResult({
+    ok: false,
+    error: { code: 'cancelled', message: 'the user dismissed this question group from the mobile app', details: {} },
+  }, item && item.rpcId);
+  const accepted = !!(receipt && receipt.accepted);
+  if (accepted && live.pendingQuestions.has(sessionId)) {
+    live.pendingQuestions.set(sessionId, (live.pendingQuestions.get(sessionId) || []).filter((q) => q.rpcId !== questionRpcId && q.questionRpcId !== questionRpcId));
+  }
+  return { accepted };
 }
 
 /** 服务健康检查。 */
@@ -471,6 +543,31 @@ async function listAgentPresets() {
 async function selectAgentPreset(sessionId, agentPreset) {
   const value = await rpc('agentPreset.select', { sessionId, agentPreset });
   return { sessionId, agentPreset: value && value.agentPreset };
+}
+
+/** 当前会话可用的模型目录（session.models）。返回 {current, routable, groups, failures}。
+ * 与桌面端 /model 弹窗同一数据源。 */
+async function listModels(sessionId) {
+  if (!sessionId) throw rpcError('BAD_REQUEST', '缺少 sessionId');
+  const value = await rpc('session.models', { sessionId });
+  return {
+    current: value && value.current || null,
+    routable: !!(value && value.routable),
+    groups: Array.isArray(value && value.groups) ? value.groups : [],
+    failures: Array.isArray(value && value.failures) ? value.failures : [],
+  };
+}
+
+/** 为当前会话选择模型（session.selectModel）。selection: {provider, model, reasoningEffort?}。 */
+async function selectModel(sessionId, selection) {
+  if (!sessionId || !selection) throw rpcError('BAD_REQUEST', '缺少 sessionId 或选择');
+  const value = await rpc('session.selectModel', {
+    sessionId,
+    provider: selection.provider,
+    model: selection.model,
+    ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+  });
+  return { selected: value && value.selected || null };
 }
 
 /** 当前权限模式（defaultPreset: read-only | workspace-write | danger-full-access）。
@@ -521,7 +618,7 @@ async function getSessionPermission(sessionId) {
 /** 切换当前会话的权限模式：执行 /permission <preset> 斜杠命令（与桌面端同一数据源）。 */
 async function setSessionPermission(sessionId, preset) {
   if (!sessionId || !preset) throw rpcError('BAD_REQUEST', '缺少 sessionId 或 preset');
-  const value = await rpcAgentScoped('commands/execute', { agentId: sessionId, line: `/permission ${preset}` });
+  const value = await rpcAgentScoped('commands/execute', { agentId: sessionId, line: `/permission ${preset}`, images: [] });
   const r = value && value.result;
   if (!r || r.kind === 'error') {
     throw rpcError('COMMAND_FAILED', (r && r.text) || '切换权限失败');
@@ -542,7 +639,7 @@ async function listCommands(sessionId) {
 
 /** 执行斜杠命令（如 /compact、/plan off）。 */
 async function executeCommand(sessionId, line) {
-  const value = await rpcAgentScoped('commands/execute', { agentId: sessionId, line: String(line || '') });
+  const value = await rpcAgentScoped('commands/execute', { agentId: sessionId, line: String(line || ''), images: [] });
   const r = value && value.result;
   if (!r || r.kind === 'error') {
     throw rpcError('COMMAND_FAILED', (r && r.text) || '命令执行失败');
@@ -601,9 +698,12 @@ module.exports = {
   cancelSession,
   answerApproval,
   answerQuestion,
+  cancelQuestion,
   ping,
   listAgentPresets,
   selectAgentPreset,
+  listModels,
+  selectModel,
   getPermission,
   setPermission,
   getSessionPermission,

@@ -16,14 +16,6 @@
       <h1>DeepSeek Harness</h1>
       <p class="sub" id="auth-sub">连接你的电脑</p>
 
-      <div id="base-form" style="display:none">
-        <div class="field">
-          <label>电脑访问地址（电脑上“手机访问”面板显示）</label>
-          <input id="base-input" inputmode="url" placeholder="http://192.168.1.5:3081" />
-        </div>
-        <button class="primary" id="btn-base-save">保存并连接</button>
-      </div>
-
       <!-- 默认：扫码连接（主入口） -->
       <button class="primary scan-hero" id="btn-scan" style="display:none">📷 扫描电脑上的二维码</button>
       <div class="hint" id="scan-hint" style="display:none">在电脑上：侧边栏点“手机访问”→ 启动 → 手机扫面板上的码</div>
@@ -35,10 +27,19 @@
         <button class="ghost" id="btn-cancel-scan">取消扫码</button>
       </div>
 
-      <!-- 手动输入（备用，默认隐藏） -->
-      <a id="btn-manual" class="manual-link" style="display:none">手动输入电脑地址</a>
+      <!-- 备选：从相册选二维码（扫码入口缺失/截图识别） -->
       <a id="btn-gallery" class="manual-link" style="display:none">从相册选择二维码</a>
       <input type="file" id="gallery-input" accept="image/*" style="display:none" />
+
+      <!-- 无相机能力的兜底：手动填电脑地址（当前几乎不出现，保留以防真机无摄像头） -->
+      <div id="base-form" style="display:none">
+        <div class="field">
+          <label>电脑访问地址（电脑上“手机访问”面板显示）</label>
+          <input id="base-input" inputmode="url" placeholder="http://192.168.1.5:3081" />
+        </div>
+        <button class="primary" id="btn-base-save">保存并连接</button>
+      </div>
+
       <div id="pair-form" style="display:none">
         <div class="field">
           <label>配对码（电脑面板高级设置里可查看）</label>
@@ -49,14 +50,6 @@
           <input id="pair-name" value="我的手机" maxlength="40" />
         </div>
         <button class="primary" id="btn-pair">请求连接（需在电脑上确认）</button>
-      </div>
-
-      <div id="pw-form" style="display:none">
-        <div class="field">
-          <label>访问密码</label>
-          <input id="pw-input" type="password" autocomplete="current-password" placeholder="电脑面板中显示的密码" />
-        </div>
-        <button class="primary" id="btn-pw-login">进入</button>
       </div>
 
       <div class="status" id="auth-status"></div>
@@ -74,9 +67,14 @@
       </div>
     </header>
     <div id="conn-bar" class="conn-bar"></div>
+    <div id="privacy-banner" class="privacy-banner" style="display:none">
+      <span class="pb-label">🔒 隐私模式</span>
+      <span class="pb-hint">正在显示全部会话</span>
+      <button id="btn-privacy-exit" class="pb-exit">一键退出</button>
+    </div>
     <main id="session-list" class="list"></main>
     <div id="home-empty" class="empty" style="display:none">
-      <div>还没有会话</div>
+      <div id="home-empty-text">还没有会话</div>
       <button class="primary" id="btn-empty-new">新建会话</button>
     </div>
   </section>
@@ -91,7 +89,6 @@
       </div>
       <button id="btn-chat-settings" class="icon-btn" title="会话设置">⋮</button>
     </header>
-    <div id="pending-area"></div>
     <main id="messages" class="messages"></main>
     <button id="btn-scroll-bottom" class="scroll-bottom" style="display:none" title="回到最新">↓</button>
     <div id="cmd-popup" class="cmd-popup" style="display:none"></div>
@@ -100,7 +97,10 @@
         <button class="tool-chip" id="chip-agent">🤖 Agent</button>
         <button class="tool-chip" id="chip-perm">🔒 权限</button>
         <span class="tool-flex"></span>
+        <button class="tool-chip" id="chip-attach" title="发送图片">📎 图片</button>
       </div>
+      <input type="file" id="attach-input" accept="image/*" multiple style="display:none" />
+      <div id="attach-preview" class="attach-preview" style="display:none"></div>
       <div class="composer-row">
         <textarea id="composer-input" rows="1" enterkeyhint="newline" placeholder="发消息给电脑上的 agent…"></textarea>
         <button id="btn-stop" class="stop-send" style="display:none" title="停止当前会话">⏹</button>
@@ -121,6 +121,9 @@
       <h3 class="preset-title">Agent 预设 <span class="muted">（决定模型与推理等级）</span></h3>
       <div id="preset-options"></div>
     </div>
+    <label class="priv-new-toggle" id="priv-new-toggle" style="display:none">
+      <input type="checkbox" id="priv-new-check" /> 🔒 以隐藏会话创建
+    </label>
   </section>
 
   <!-- 设置 -->

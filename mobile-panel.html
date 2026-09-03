@@ -179,8 +179,8 @@
           <button data-net="remote" id="seg-remote">不同网络</button>
         </div>
         <div class="warn hidden" id="remote-warn">
-          <b>⚠️ 注意：</b>手机与电脑不在同一网络时，连接将经过公网隧道（传输加密）。
-          请确认这是你自己的手机；配对仍需电脑端确认。
+          <b>⚠️ 注意：</b>手机与电脑不在同一网络时，手机会自动优先走 IPv6 直连（更快、不中转），
+          IPv6 不通才经公网隧道兜底。请确认这是你自己的手机；配对仍需电脑端确认。
         </div>
 
         <div class="qr-wrap">
@@ -198,7 +198,7 @@
           <button class="mini" id="btn-gen-qr" style="display:none">生成配对二维码</button>
         </div>
         <div class="warn hidden" id="offline-hint">
-          <b>💡 连不上？</b>电脑重启后远程隧道地址会变化：手机 App 会自动尝试局域网地址重连；
+          <b>💡 连不上？</b>手机 App 会自动按「局域网 → IPv6 直连 → 隧道」的顺序重连；
           若仍失败，直接扫上方的二维码重新配对即可（手机已配对过，重扫会替换旧连接，无需重装）。
         </div>
         <div class="note" id="qr-hint">用手机 App 点“扫描二维码”扫上面的码（或用系统相机扫，会自动打开 App）。</div>
@@ -220,8 +220,8 @@
           </div>
           <div class="switch-row">
             <div>
-              <div class="lbl">远程访问（Cloudflare 隧道）</div>
-              <div class="sub">不在同一网络时手机也能连上</div>
+              <div class="lbl">远程兜底（Cloudflare 隧道）</div>
+              <div class="sub">IPv6 直连不可用时的备用通道（不在同一网络也能连上）</div>
             </div>
             <div class="switch" id="tunnel-switch"></div>
           </div>
@@ -339,20 +339,27 @@
       if (net === 'lan') {
         entry = qrs.find((e) => !e.label.startsWith('远程')) || qrs[0] || null;
       } else {
-        if (!tun.running) {
-          showLoading();
-          $('qr-cap').textContent = '需要先开启远程访问（选“不同网络”会自动开启，或在高级设置里打开）';
-          $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
-          return;
+        // 不同网络：优先 IPv6 直连（快、无需等 Cloudflare 隧道就绪）；无 IPv6 再用隧道兜底
+        const isV6 = (e) => /^https?:\/\/\[[0-9a-fA-F:.]+\]/.test(e.url || e.label || '');
+        const v6Entry = qrs.find(isV6);
+        if (v6Entry) {
+          entry = { ...v6Entry, label: 'IPv6 直连（快） · ' + v6Entry.url };
+        } else {
+          if (!tun.running) {
+            showLoading();
+            $('qr-cap').textContent = '需要先开启远程访问（选“不同网络”会自动开启，或在高级设置里打开）';
+            $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
+            return;
+          }
+          // 隧道未就绪（边缘路由还没生效）时不展示二维码，避免手机扫到 530
+          if (!tun.ready && !tun.verifyFailed) {
+            showLoading();
+            $('qr-cap').textContent = '隧道连接中…（约几秒后自动出现二维码）';
+            $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
+            return;
+          }
+          entry = qrs.find((e) => e.label.startsWith('远程')) || null;
         }
-        // 隧道未就绪（边缘路由还没生效）时不展示二维码，避免手机扫到 530
-        if (!tun.ready && !tun.verifyFailed) {
-          showLoading();
-          $('qr-cap').textContent = '隧道连接中…（约几秒后自动出现二维码）';
-          $('pair-code').textContent = state.pairPending ? state.pairPending.code : '--------';
-          return;
-        }
-        entry = qrs.find((e) => e.label.startsWith('远程')) || null;
       }
       if (!entry || !entry.qr) {
         showLoading();
@@ -461,7 +468,9 @@
     $('seg-remote').onclick = async () => {
       net = 'remote';
       const tun = (state || {}).tunnel || {};
-      if (!tun.running) {
+      // 有 IPv6 直连就不用强开隧道（更快）；无 IPv6 才自动尝试开启隧道
+      const hasV6 = ((state || {}).pairQrs || []).some((e) => /^https?:\/\/\[[0-9a-fA-F:.]+\]/.test(e.url || e.label || ''));
+      if (!tun.running && !hasV6) {
         // 自动尝试开启隧道
         $('status').textContent = '正在开启远程访问…';
         $('status').className = 'status';

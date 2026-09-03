@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.0.4",
+  "version": "0.1.1",
   "description": "DeepSeek Harness desktop app (Electron shell) — 自带 dsh 服务与手机远程访问",
   "main": "main.js",
   "author": "DeepSeek Harness",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win",
-    "postinstall": "node apply-dsh-picker-fix.js && node apply-dsh-ui-patches.js && node apply-nsis-progress-fix.js"
+    "postinstall": "node apply-dsh-picker-fix.js && node apply-dsh-ui-patches.js && node apply-dsh-privacy-patch.js && node apply-nsis-progress-fix.js"
   },
   "devDependencies": {
     "electron": "^43.4.0",

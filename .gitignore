@@ -31,6 +31,9 @@ apk/*.zip
 apk/node_modules/
 apk/www/
 
+# --- 手机 APK（构建产物，从 GitHub Release 附件分发，不入库） ---
+*.apk
+
 # --- 隧道二进制（运行时自动下载；安装包已内置） ---
 vendor/cloudflared.exe
 

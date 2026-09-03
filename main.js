@@ -49,6 +49,7 @@ const WORKSPACE_DIR = IS_PACKAGED
   : path.resolve(APP_DIR, '..'); // e.g. D:\deepseekHarness
 const CONFIG_PATH = path.join(WRITABLE_DIR, 'config.json');
 const SERVER_LOG_PATH = path.join(WRITABLE_DIR, 'server.log');
+const PRIVACY_PATH = path.join(WRITABLE_DIR, 'privacy.json'); // 桌面+手机共享的"隐藏会话"列表
 const ICON_PATH = path.join(APP_DIR, 'icon.ico');
 const LOADING_PATH = path.join(APP_DIR, 'loading.html');
 const PRELOAD_PATH = path.join(APP_DIR, 'preload.js');
@@ -72,6 +73,39 @@ let isQuitting = false; // true once a real quit is underway (bypasses close dia
 let tray = null;
 let mobilePanel = null; // 手机访问控制面板窗口
 let tunnelRestarts = 0; // 隧道意外退出后的连续重启次数（防止死循环）
+
+// 隐私模式：桌面端 + 手机端共用的"被隐藏的会话 id 列表"。主进程持有并落盘，
+// 手机经 /m/hidden 访问（mobile.js），桌面 Web 经 preload 的 IPC 读写。
+let privacyState = { hidden: [] };
+
+function loadPrivacyFile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(PRIVACY_PATH, 'utf8'));
+    privacyState = { hidden: Array.isArray(data.hidden) ? data.hidden.filter((x) => typeof x === 'string') : [] };
+  } catch {
+    privacyState = { hidden: [] };
+  }
+  return privacyState;
+}
+
+function savePrivacyFile() {
+  try {
+    fs.writeFileSync(PRIVACY_PATH, JSON.stringify(privacyState, null, 2), 'utf8');
+  } catch (e) {
+    log('privacy save failed: ' + e.message);
+  }
+}
+
+function getPrivacyState() {
+  return { hidden: (privacyState.hidden || []).slice() };
+}
+
+// setter 受写者约束：只接受 string 数组（防注入）
+function setPrivacyState(next) {
+  privacyState = { hidden: next && Array.isArray(next.hidden) ? next.hidden.filter((x) => typeof x === 'string') : [] };
+  savePrivacyFile();
+  return getPrivacyState();
+}
 
 // ---------------------------------------------------------------------------
 // config
@@ -178,14 +212,14 @@ function startServer() {
     if (resolved.kind === 'bundled') {
       // Use Electron's own Node runtime so end users don't need Node installed.
       // --expose-internals: required by dsh's HMR service (cordis-plugin-hmr).
-      serverChild = spawn(process.execPath, ['--expose-internals', resolved.bin, 'web', '--port', String(PORT)], {
+      serverChild = spawn(process.execPath, ['--expose-internals', resolved.bin, 'web', '--port', String(PORT), '--no-open'], {
         cwd: WORKSPACE_DIR,
         windowsHide: true,
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } else if (resolved.kind === 'node') {
-      serverChild = spawn('node', [resolved.bin, 'web', '--port', String(PORT)], {
+      serverChild = spawn('node', [resolved.bin, 'web', '--port', String(PORT), '--no-open'], {
         cwd: WORKSPACE_DIR,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -193,7 +227,7 @@ function startServer() {
     } else {
       serverChild = spawn(
         'cmd.exe',
-        ['/d', '/s', '/c', `npx --yes @deepseek-ai/dsh web --port ${PORT}`],
+        ['/d', '/s', '/c', `npx --yes @deepseek-ai/dsh web --port ${PORT} --no-open`],
         { cwd: WORKSPACE_DIR, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
       );
     }
@@ -322,6 +356,9 @@ async function startMobileAccess() {
         // 手机经隧道地址真实连上本机 → 这是最可靠的“隧道可用”证据
         if (tunnel.isRunning() && !tunnel.isReady()) tunnel.markVerified();
       },
+      // 隐私共享存储：手机 /m/hidden 读写同一份"隐藏会话"列表
+      getPrivacy: getPrivacyState,
+      setPrivacy: setPrivacyState,
     });
     config.mobile.enabled = true;
     saveConfig();
@@ -474,6 +511,10 @@ function registerMobileIpc() {
         .catch((err) => log('tunnel restart failed: ' + err.message));
     }, 5000);
   });
+
+  ipcMain.handle('privacy:get', async () => getPrivacyState());
+
+  ipcMain.handle('privacy:set', async (_e, next) => setPrivacyState(next || { hidden: [] }));
 
   ipcMain.handle('mobile:get', async () => {
     // 配对码过期（10 分钟）后自动换一个新的，避免面板一直显示过期二维码
@@ -1368,6 +1409,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    loadPrivacyFile(); // 恢复共享"隐藏会话"列表（桌面+手机同源）
     registerMobileIpc();
     return boot();
   });

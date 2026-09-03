@@ -14,7 +14,9 @@ const LS_BASE = 'dshm_base';
 const LS_BASES = 'dshm_bases'; // 已知电脑地址列表 [{url, lastOk}]，连不上时自动换地址重试
 const LS_DEVICE_ID = 'dshm_device_id';
 const LS_CACHE = 'dshm_cache'; // 会话消息缓存 {sessionId: {msgs, ts}}
-const APP_VERSION = '1.2.0';
+const LS_HIDDEN = 'dshm_hidden'; // 被隐藏（隐私）的会话 id 数组
+const LS_PRIVACY = 'dshm_privacy'; // '1'=隐私模式已开启
+const APP_VERSION = '0.1.1';
 
 /** 持久设备标识：同一台手机重新配对时服务端据此识别为同一设备。 */
 function deviceId() {
@@ -61,10 +63,28 @@ let lastSessions = { items: [] };
 let pairingInFlight = false;
 let failoverInFlight = false; // 防止并发自动切换地址
 
+// 待回应项（问题/审批）：内联渲染进消息流，不再常驻消息列表上方。
+let pendingList = { approvals: [], questions: [] };
+let questionPage = 0; // 多问题时分页：当前显示第几题（0 基）
+// 问题组草稿：keyed by 子问题 id -> { selected, custom, skipped }，用于整组一次性提交（匹配桌面端 matchesQuestions 的长度与 id 校验）
+let qDrafts = {};
+let qDraftGroup = null; // 当前草稿所属的问题组 rpcId，切组即清空
+let lastTunnelSync = 0; // 上次同步隧道地址的时间（限速，防频繁 /m/status）
+
 // 会话操作状态（输入框内的快捷切换按钮）
 let currentPerm = ''; // 当前权限模式 id（read-only / workspace-write / danger-full-access）
 let currentPresetLabel = ''; // 当前会话的 Agent 预设显示名
 let sessionRunning = false; // 当前会话是否在运行（控制停止按钮显隐）
+
+// 隐私模式：可把部分会话隐藏，进入需要隐蔽操作，退出一键。
+let hiddenSessions = new Set(); // 被隐藏的会话 id
+let privacyActive = false; // 是否处于隐私模式（true=查看被隐藏的会话）
+let lastHiddenWrite = 0; // 最近一次本机写入共享隐藏名单的时间（防轮询旧值覆盖）
+
+// 待发送图片（base64 data URL 数组，vision 输入）
+let pendingImages = [];
+const MAX_ATTACH = 4; // 单次最多附 4 张图，避免 payload 过大
+const MAX_IMG_BYTES = 6 * 1024 * 1024; // 单张 ≤6MB（超限压缩到该尺寸内）
 
 // 主题（深色/浅色），持久化到 localStorage
 const LS_THEME = 'dshm_theme';
@@ -98,8 +118,13 @@ function toggleTheme() {
 let chatMsgs = []; // 当前会话已加载的消息（带 seq，最早在前）
 let chatHasMore = false; // 是否还有更早历史可加载
 let chatLoadingMore = false; // 正在加载更早历史
+let justOpenedChat = false; // 刚进入会话：首次渲染强制滚到底部（最新消息），避免停留在中间
+let pendingOutgoing = []; // 本地待发送消息 [{id,text,images,status}]，显示"发送中/已发送/失败"
+let outSeq = 1;
+let agentStatus = ''; // 会话运行时在对话流末尾显示的 agent 状态（接收信息中/思考中）
 let cmdCache = {}; // 斜杠命令缓存 {sessionId: [{name,description,hint}]}
 let cmdLoading = {}; // 正在加载命令的会话
+let cmdErr = {}; // 命令列表加载错误 {sessionId: Error}，命令菜单点击可弹窗复制
 
 // ---------------------------------------------------------------------------
 // 基础
@@ -128,6 +153,20 @@ function reportError(title, detail) {
       '\n电脑地址：' + (base || '（未设置）');
     modal.style.display = 'flex';
   } catch {}
+}
+
+/** 统一错误弹窗：把 Error（含 api() 附带的 status/path/resp）展开成可复制的完整详情。 */
+function showErr(title, err, extra) {
+  const e = err || {};
+  const parts = [];
+  if (e.status) parts.push('HTTP 状态：' + e.status);
+  if (e.path) parts.push('请求：' + (base || '') + e.path);
+  if (e.code) parts.push('错误码：' + e.code);
+  const msg = e.message || String(e) || '未知错误';
+  parts.push('原因：' + msg);
+  if (e.resp && e.resp !== msg) parts.push('服务端返回：' + e.resp);
+  if (extra) parts.push(extra);
+  reportError(title || '操作失败', parts.join('\n'));
 }
 
 $('btn-err-close').addEventListener('click', () => {
@@ -173,16 +212,41 @@ function clearToken() {
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = 'Bearer ' + token;
+  // 带超时的 fetch：切换网络后局域网地址可能不可达，若不设超时请求会一直挂起，
+  // 轮询的 catch 触发不了 -> autoFailover 不跑 -> 只能杀进程重开。超时后走失败重试/换地址。
+  // _timeoutMs：覆盖默认 9s 超时（慢操作如 /compact 压缩上下文，往往需要数十秒）。
+  // _noRetry：跳过"失败自动重试一次"。重试只适合非幂等的读/轮询；对 /m/command 这类会
+  //   在服务端实际执行的有状态命令，超时自动重发会造成"输入一次却执行两次"（第二次撞 busy）。
+  //   慢命令一旦发出，服务端会继续跑完，客户端只需等待 + 显示进行中，绝不能重发。
+  const timeoutMs = opts._timeoutMs || 9000;
+  const noRetry = !!opts._noRetry;
+  const doFetch = async () => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      return await fetch(base + path, { ...opts, signal: ctl.signal, headers: { ...headers, ...(opts.headers || {}) } });
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        const err = new Error('连接超时');
+        err.code = 'TIMEOUT';
+        throw err;
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   let res;
   try {
-    res = await fetch(base + path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+    res = await doFetch();
   } catch (e) {
     // 网络层失败（离线/隧道空闲断开/抖动）：自动重试一次，避免"连接上后一段时间不用就超时"。
-    // 重试仍失败才报错。
-    if (!opts._retried) {
-      await new Promise((r) => setTimeout(r, 800));
+    // 重试仍失败才报错，交由调用方 catch 触发 autoFailover。
+    // 注意：_noRetry 用于 /m/command，杜绝"超时→重发→执行两遍"。
+    if (!noRetry && !opts._retried) {
+      await new Promise((r) => setTimeout(r, 700));
       try {
-        res = await fetch(base + path, { ...opts, _retried: true, headers: { ...headers, ...(opts.headers || {}) } });
+        res = await doFetch();
       } catch (e2) {
         throw new Error('无法连接电脑（' + (e2.message || e.message) + '）');
       }
@@ -202,8 +266,12 @@ async function api(path, opts = {}) {
     data = await res.json();
   } catch {}
   if (!res.ok) {
+    // 错误带 status + path + 服务端返回体，上层弹窗可展示具体原因（如 HTTP 404 not found）。
     const err = new Error(data.error || ('HTTP ' + res.status));
     err.code = data.code;
+    err.status = res.status;
+    err.path = path;
+    err.resp = data.error || '';
     throw err;
   }
   return data;
@@ -240,6 +308,7 @@ function fmtTime(ts) {
 // ---------------------------------------------------------------------------
 
 async function boot() {
+  setupNetworkWatcher(); // 切网自动重连：WiFi↔流量 时主动换到可用地址，无需杀进程重开
   loadBases();
   const storedBase = localStorage.getItem(LS_BASE);
   if (storedBase) base = storedBase;
@@ -258,7 +327,7 @@ async function boot() {
       showAuth('登录已失效，请重新扫码配对');
       return;
     }
-    showAuth('无法连接电脑（' + (bases.length ? '已尝试 ' + bases.length + ' 个地址' : '未设置地址') + '），请检查网络后重试');
+    showAuth('无法连接电脑（' + (bases.length ? '已尝试 ' + bases.length + ' 个地址' : '未设置地址') + '）——请点「扫描电脑上的二维码」获取最新地址');
     $('btn-retry').style.display = 'block';
     return;
   }
@@ -279,7 +348,15 @@ async function showAuth(msg) {
   if (ver) ver.textContent = 'v' + APP_VERSION;
   $('auth-status').textContent = msg || '';
   $('auth-status').className = 'status';
+  // 扫码 / 重连入口恒显，且放在任何异步探测之前 —— 保证“连不上”的状态也能立即重新扫码，
+  // 不依赖下面 /auth/status 的结果（它可能因网络/地址失效而拖慢或失败）。
   $('btn-retry').style.display = 'none';
+  $('btn-scan').style.display = 'block';
+  $('scan-hint').style.display = 'block';
+  $('btn-gallery').style.display = 'block';
+  $('pair-form').style.display = 'none'; // 手动输入配对码已移除
+  const pwForm = $('pw-form');
+  if (pwForm) pwForm.style.display = 'none'; // 密码模式已废弃；旧服务端残留时给出提示
   try {
     const st = await api('/auth/status');
     mode = st.mode;
@@ -287,33 +364,16 @@ async function showAuth(msg) {
   const hasCam = canUseCamera();
   // 完全没有相机能力时才需要手动输入电脑地址
   const needBase = !base && !hasCam;
-  // 扫码是唯一主入口：只要处于配对模式就显示扫码按钮（不依赖相机探测结果），
-  // 点开后若无相机能力会给出明确提示。
   const showPair = mode === 'pair';
   $('base-form').style.display = needBase ? 'block' : 'none';
-  // 扫码按钮恒显（唯一主入口），密码模式（旧服务端残留）也显示，扫了会提示去电脑端切换
-  $('btn-scan').style.display = 'block';
-  $('scan-hint').style.display = 'block';
-  $('btn-gallery').style.display = 'block';
-  $('pair-form').style.display = 'none'; // 手动输入配对码已移除
-  $('pw-form').style.display = 'none'; // 密码模式已废弃；旧服务端残留时给出提示
   $('auth-sub').textContent = showPair
     ? '扫电脑面板上的二维码即可连接'
     : '请在电脑上重新开启“手机访问”后再扫码';
 }
 
-// 手动输入折叠切换
-// 配对码手动输入已移除（扫码是唯一入口）：此按钮改为展开“手动输入电脑地址”
-// 备用于 远程隧道地址变化、相机不可用 等场景（电脑面板上有“复制”按钮）。
-if ($('btn-manual')) {
-  $('btn-manual').addEventListener('click', () => {
-    $('base-form').style.display = 'block';
-    $('btn-manual').style.display = 'none';
-    $('scan-hint').style.display = 'none';
-    $('base-input').focus();
-  });
-  $('btn-manual').style.display = 'block';
-}
+// 手动输入电脑地址已移除：扫码是唯一连接入口（配合「从相册选择二维码」）。
+// 手机端不再暴露手输 URL，避免断开后误填导致连错主机。无相机能力时只提示去电脑端扫码。
+// （保留 base-form 作为 PWA 同源/极少数无相机场景的兜底，但不渲染手动展开链接。）
 
 // 重新连接：token 仍在但网络错误时，一键重试（不清 token、不重新扫码）。
 // 会依次尝试所有已知地址（当前地址 → 最近可用的其它地址）。
@@ -494,6 +554,22 @@ function markBaseOk(url) {
   }
 }
 
+/** 把当前隧道公网地址同步进地址池（保持最新）。
+ * 隧道地址每次桌面重启都会变，但手机只要连上（本地/隧道任一）就能从 /m/status
+ * 拿到最新地址保存下来；之后切到蜂窝流量等局域网不可达的网络时，才能自动切到隧道，
+ * 而不是死记旧的局域网地址导致“切网就断”。 */
+function syncTunnelBase(url) {
+  const u = String(url || '').replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(u)) return;
+  const b = bases.find((x) => x.url === u);
+  if (b) {
+    b.lastOk = Date.now();
+  } else {
+    bases.unshift({ url: u, lastOk: Date.now() });
+  }
+  saveBases();
+}
+
 /** 所有已知地址（当前 base 优先，其余按最近可用排序）。
  * 局域网地址（http://IP）比隧道地址（https://*.trycloudflare.com）稳定：
  * 隧道地址每次重启都会变 —— 当前 base 是隧道时，先试局域网，
@@ -531,6 +607,15 @@ function candidateBases() {
 
 function isTunnelUrl(u) {
   return /trycloudflare\.com/i.test(String(u || ''));
+}
+
+/** 当前地址属于哪条连接路径（用于首页/设置显示"正在用哪条路"）。 */
+function connLabel(u) {
+  if (!u) return '未连接';
+  if (isTunnelUrl(u)) return '隧道（兜底）';
+  if (/^https?:\/\/\[[0-9a-fA-F:]+\]/.test(String(u))) return 'IPv6 直连';
+  if (/^https?:\/\//.test(String(u))) return '局域网直连';
+  return '未知';
 }
 
 /** 带超时的探测请求（不触发 api() 的 401 清理逻辑；失败返回 null 而非抛错）。 */
@@ -618,6 +703,63 @@ async function autoFailover() {
   return false;
 }
 
+// --- 网络变化自动重连：切换 WiFi/流量 等导致当前地址不可达时，主动切换到最优可用地址 ---
+let lastNetChange = 0; // 限速，防止 connection.change 高频触发
+let netSwitchBusy = false;
+async function onNetChanged() {
+  if (netSwitchBusy) return;
+  const now = Date.now();
+  if (now - lastNetChange < 2500) return; // 限速
+  lastNetChange = now;
+  netSwitchBusy = true;
+  const prevBase = base;
+  try {
+    const res = await tryAllBases();
+    if (res === 'ok') {
+      if (base !== prevBase) toast('已切换连接方式：' + connLabel(base));
+      if (currentView === 'home') homePoll();
+      else if (currentView === 'chat') chatPoll();
+      else if (currentView === 'settings') settingsPoll();
+    }
+  } catch {} finally {
+    netSwitchBusy = false;
+  }
+}
+function setupNetworkWatcher() {
+  window.addEventListener('online', onNetChanged);
+  try {
+    if (navigator.connection && typeof navigator.connection.addEventListener === 'function') {
+      navigator.connection.addEventListener('change', onNetChanged);
+    }
+  } catch {}
+}
+
+let lastLanProbe = 0; // 上次探测“局域网直连”的时间（限速）
+
+/** 手机与电脑在同一 WiFi 时，自动改走局域网直连（192.168.x.x）而非隧道，
+ * 避免消息往返 Cloudflare 导致的接收慢。仅在“当前是隧道地址且局域网可达”时切换。 */
+async function preferLan() {
+  if (!isTunnelUrl(base)) return false;           // 已在局域网直连（非隧道），无需切
+  if (Date.now() - lastLanProbe < 15000) return false; // 15s 限速
+  lastLanProbe = Date.now();
+  const lanList = bases.filter((b) => !isTunnelUrl(b.url)).map((b) => b.url);
+  if (!lanList.length) return false;
+  for (const u of lanList) {
+    const r = await probeBase(u, 2500);
+    if (r && r.status === 200 && r.data) {
+      base = u;
+      localStorage.setItem(LS_BASE, u);
+      markBaseOk(u);
+      device = r.data.device;
+      mode = r.data.mode;
+      saveToken(token, device);
+      toast('已切换到局域网直连（更快）');
+      return true;
+    }
+  }
+  return false;
+}
+
 /** 自动设备名（扫码配对时无需手动输入）。 */
 function autoDeviceName() {
   const ua = navigator.userAgent || '';
@@ -662,11 +804,15 @@ async function requestPair(code, name) {
     homePoll();
     return true;
   } catch (e) {
-    const msg = e.name === 'AbortError' ? '电脑端未确认（超时），请重试' : e.message;
-    $('auth-status').textContent = msg;
+    const isTimeout = e.name === 'AbortError';
+    const isNetwork = e.name === 'TypeError' || /failed to fetch|network|load failed/i.test(String(e.message || ''));
+    const hint = isNetwork
+      ? '无法连接电脑：网络异常或该地址已失效。\n请确认电脑端「手机访问」已开启，并扫描电脑上最新的二维码；\n若手机与电脑在同一 WiFi，请改用局域网二维码。'
+      : (isTimeout ? '电脑端未确认（超时），请重试' : e.message);
+    $('auth-status').textContent = hint;
     $('auth-status').className = 'status err';
-    if (e.name !== 'AbortError') {
-      reportError('连接电脑失败', msg + '\n请求地址：' + base + '/auth/pair');
+    if (!isTimeout) {
+      reportError('连接电脑失败', hint + '\n请求地址：' + base + '/auth/pair');
     }
     return false;
   } finally {
@@ -755,26 +901,28 @@ $('btn-pair').addEventListener('click', async () => {
   await requestPair(code, name);
 });
 
-$('btn-pw-login').addEventListener('click', async () => {
-  const pw = $('pw-input').value;
-  const onLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  if (!base && !onLocalhost) base = location.origin;
-  const btn = $('btn-pw-login');
-  btn.disabled = true;
-  $('auth-status').textContent = '登录中…';
-  try {
-    const data = await api('/auth/password-login', { method: 'POST', body: JSON.stringify({ password: pw }) });
-    saveToken(data.token, { id: 'password-session', name: '密码登录', active: true });
-    mode = data.mode;
-    showView('home');
-    homePoll();
-  } catch (e) {
-    $('auth-status').textContent = e.message;
-    $('auth-status').className = 'status err';
-  } finally {
-    btn.disabled = false;
-  }
-});
+if ($('btn-pw-login')) {
+  $('btn-pw-login').addEventListener('click', async () => {
+    const pw = $('pw-input').value;
+    const onLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if (!base && !onLocalhost) base = location.origin;
+    const btn = $('btn-pw-login');
+    btn.disabled = true;
+    $('auth-status').textContent = '登录中…';
+    try {
+      const data = await api('/auth/password-login', { method: 'POST', body: JSON.stringify({ password: pw }) });
+      saveToken(data.token, { id: 'password-session', name: '密码登录', active: true });
+      mode = data.mode;
+      showView('home');
+      homePoll();
+    } catch (e) {
+      $('auth-status').textContent = e.message;
+      $('auth-status').className = 'status err';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
 
 // --- 扫码（APK 用原生扫码插件，浏览器环境用 getUserMedia + jsQR 兜底）---
 let cameraStream = null;
@@ -826,11 +974,12 @@ async function startCamera() {
   }
 }
 
-/** 展开手动输入兜底（没有地址时先让用户填电脑地址）。 */
+/** 展开手动输入兜底（没有地址时先让用户填电脑地址）。已不再渲染“手动输入”链接，仅保留无相机兜底。 */
 function showManualFallback(hint) {
   $('btn-scan').style.display = 'none';
   $('scan-hint').style.display = 'none';
-  $('btn-manual').style.display = 'none';
+  const manual = $('btn-manual');
+  if (manual) manual.style.display = 'none';
   $('pair-form').style.display = 'block';
   $('pair-name').value = autoDeviceName();
   $('pair-code').focus();
@@ -909,13 +1058,19 @@ async function homePoll() {
   try {
     const data = await api('/m/sessions');
     lastSessions = data;
+    await loadHiddenFromServer(); // 同步桌面端/共享隐藏名单
     renderSessions(data.items);
     const st = await api('/m/status');
+    // 把最新隧道公网地址同步进地址池：之后切到蜂窝等局域网不可达的网络仍能连上
+    if (st.tunnel && st.tunnel.url) syncTunnelBase(st.tunnel.url);
     const parts = [];
     if (st.dshUp) parts.push('电脑已连接');
     else parts.push('电脑服务未运行');
-    if (st.tunnel && st.tunnel.url) parts.push('远程地址可用');
+    parts.push('📶 ' + connLabel(base));
+    if (st.tunnel && st.tunnel.url && !isTunnelUrl(base)) parts.push('隧道兜底可用');
     $('conn-bar').textContent = parts.join(' · ');
+    // 同一 WiFi 时自动改用局域网直连（更快），切换成功后重新拉取
+    preferLan().then((switched) => { if (switched) homePoll(); });
   } catch (e) {
     $('conn-bar').textContent = e.message;
     // 只有 401（token 被吊销）才清 token 重新配对；
@@ -931,24 +1086,140 @@ async function homePoll() {
         homePoll();
       } else if (currentView === 'home') {
         // 所有已知地址都连不上：回到连接页（扫码/重试入口），但不清 token
-        showAuth('连接已断开：电脑端可能已重启（远程地址变化）或网络不可达');
+        showAuth('连接已断开：电脑端可能已重启（远程地址变化）或网络不可达——请点「扫描电脑上的二维码」重新连接');
         $('btn-retry').style.display = 'block';
       }
     });
   }
 }
 
+// ---------------------------------------------------------------------------
+// 隐私模式：隐藏部分对话，进入需要隐蔽操作，退出一键。
+//
+//   · 把某个会话设为「隐藏」后，它不会出现在首页列表。
+//   · 想看隐藏会话：在首页顶部标题「DeepSeek Harness」上快速连续点 5 下，
+//     进入隐私模式（隐藏会话此时出现，顶部多一条提示 + 「一键退出」按钮）。
+//   · 退出：点「一键退出」即回到普通列表。
+//   · 隐藏 / 取消隐藏：会话 ⋮ 菜单，或会话行右侧的「👁/🔒」开关。
+// ---------------------------------------------------------------------------
+
+function loadPrivacy() {
+  // active（是否处于隐私视图）是本机状态；隐藏名单由服务端共享（桌面+手机同源）。
+  privacyActive = localStorage.getItem(LS_PRIVACY) === '1';
+  hiddenSessions = new Set(); // 稍后从服务端拉取
+  applyPrivacyUI();
+}
+
+/** 从服务端拉取共享的隐藏会话列表（桌面端改动也会同步到这里）。 */
+async function loadHiddenFromServer() {
+  // 刚本机写过分到服务端，服务端可能还是旧值；短暂跳过本轮，避免用旧值覆盖刚隐藏的状态
+  if (Date.now() - lastHiddenWrite < 2500) return;
+  try {
+    const d = await api('/m/hidden');
+    hiddenSessions = new Set(d && Array.isArray(d.hidden) ? d.hidden.filter((x) => typeof x === 'string') : []);
+  } catch {
+    // 网络/未登录时保留当前列表，等下次轮询再同步
+  }
+}
+
+function savePrivacy() {
+  // 仅持久化 active（本机）；隐藏名单直接写服务端，见 syncHiddenToServer()
+  try { localStorage.setItem(LS_PRIVACY, privacyActive ? '1' : '0'); } catch {}
+}
+
+/** 把当前隐藏名单全量上报到共享存储（桌面端可读）。 */
+function syncHiddenToServer() {
+  lastHiddenWrite = Date.now();
+  api('/m/hidden', { method: 'POST', body: JSON.stringify({ hidden: [...hiddenSessions] }) })
+    .then(() => { lastHiddenWrite = Date.now(); })
+    .catch(() => {});
+}
+
+function isHidden(sessionId) { return hiddenSessions.has(sessionId); }
+
+/** 切换隐私模式，并同步界面（顶部提示条 + 退出按钮 + 重新渲染列表）。 */
+function setPrivacy(active) {
+  privacyActive = !!active;
+  savePrivacy();
+  applyPrivacyUI();
+  if (currentView === 'home') {
+    renderSessions(lastSessions.items || []);
+    homePoll(); // 立即刷新（列表可能因过滤变化）
+  }
+}
+
+function enterPrivacyMode() {
+  setPrivacy(true);
+  toast('已进入隐私模式，正在显示全部会话');
+}
+
+function exitPrivacyMode() {
+  setPrivacy(false);
+  toast('已退出隐私模式');
+}
+
+/** 隐藏 / 取消隐藏某个会话。 */
+function toggleHideSession(sessionId) {
+  if (!sessionId) return;
+  if (hiddenSessions.has(sessionId)) {
+    hiddenSessions.delete(sessionId);
+    toast('已取消隐藏该会话');
+  } else {
+    hiddenSessions.add(sessionId);
+    toast('已隐藏该会话，进入隐私模式可见');
+  }
+  syncHiddenToServer();
+  if (currentView === 'home') renderSessions(lastSessions.items || []);
+}
+
+/** 根据 privacyActive 更新界面：顶部提示条 +「一键退出」按钮 + 空态文案。 */
+function applyPrivacyUI() {
+  const banner = $('privacy-banner');
+  if (banner) banner.style.display = privacyActive ? 'flex' : 'none';
+  document.body.classList.toggle('privacy-on', privacyActive);
+  const t = $('home-empty-text');
+  if (t) t.textContent = '还没有会话';
+}
+
+$('btn-privacy-exit').addEventListener('click', exitPrivacyMode);
+
+// 隐蔽入口：在首页顶部标题上快速连续点 5 下进入隐私模式。
+(function setupPrivacyEntry() {
+  const brand = document.querySelector('#view-home .brand');
+  if (!brand) return;
+  let taps = 0;
+  let lastTap = 0;
+  brand.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap > 900) taps = 0; // 停顿即重新计数
+    lastTap = now;
+    taps += 1;
+    if (taps >= 5) {
+      taps = 0;
+      enterPrivacyMode();
+    }
+  });
+})();
+
 function renderSessions(items) {
   const list = $('session-list');
-  $('home-empty').style.display = items.length ? 'none' : 'flex';
+  const all = items || [];
+  // 普通模式：隐藏被标记为隐私的会话；隐私模式：显示全部（含隐藏会话，隐藏会话带标识）。
+  const visible = all.filter((s) => (privacyActive ? true : !isHidden(s.sessionId)));
+  $('home-empty').style.display = visible.length ? 'none' : 'flex';
   list.innerHTML = '';
   const seen = new Set();
-  for (const s of items) {
+  for (const s of visible) {
     if (seen.has(s.sessionId)) continue;
+    // 子智能体会话（origin === 'subagent'）不显示在主会话列表里，避免同一任务
+    // 派生出的多个子对话刷屏。子 agent 的进展在父会话里以消息形式呈现。
+    if (s.origin === 'subagent') continue;
     seen.add(s.sessionId);
+    const hid = isHidden(s.sessionId);
     const item = document.createElement('div');
-    item.className = 'session-item';
+    item.className = 'session-item' + (hid ? ' hidden-item' : '');
     const badges = [];
+    if (hid) badges.push('<span class="badge priv">🔒 隐私</span>');
     if (s.running) badges.push('<span class="badge run">运行中</span>');
     if (s.pendingApprovals || s.pendingQuestions) badges.push('<span class="badge pending">待处理</span>');
     // 上下文用量：进度条 + 已用/上限（无数据时不显示）
@@ -972,10 +1243,21 @@ function renderSessions(items) {
         <div class="si-badges">${badges.join('')}</div>
         ${ctxHtml}
       </div>
-      <div class="si-time">${fmtTime(s.updatedAt)}</div>`;
+      <div class="si-side">
+        <button class="si-eye${hid ? ' locked' : ''}" data-hide="${esc(s.sessionId)}"
+          title="${hid ? '取消隐藏' : '隐藏此会话'}">${hid ? '🔒' : '👁'}</button>
+        <div class="si-time">${fmtTime(s.updatedAt)}</div>
+      </div>`;
     item.addEventListener('click', () => openChat(s.sessionId, s.title));
     list.appendChild(item);
   }
+  // 行内隐藏/取消隐藏开关（阻止冒泡，避免误触发打开会话）
+  list.querySelectorAll('[data-hide]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleHideSession(b.dataset.hide);
+    });
+  });
 }
 
 function esc(s) {
@@ -1027,6 +1309,9 @@ $('btn-new').addEventListener('click', openNew);
 $('btn-empty-new').addEventListener('click', openNew);
 // 设置页入口见下方 settingsPoll 区域（含加载占位）
 
+// --- 新建会话时是否作为"隐藏"会话创建（隐私模式下默认开启） ---
+let createAsHidden = false;
+
 // ---------------------------------------------------------------------------
 // 新建会话：选文件夹（电脑上已配置的工作区）
 // ---------------------------------------------------------------------------
@@ -1036,6 +1321,14 @@ async function openNew() {
   const list = $('workspace-list');
   list.innerHTML = '<div class="empty">加载中…</div>';
   loadPresetOptions();
+  // 隐私模式下新建会话默认作为"隐藏"会话创建，用户在新建页可取消勾选
+  const toggle = $('priv-new-toggle');
+  const check = $('priv-new-check');
+  if (toggle && check) {
+    toggle.style.display = privacyActive ? 'flex' : 'none';
+    check.checked = privacyActive;
+    createAsHidden = privacyActive;
+  }
   try {
     const data = await api('/m/workspaces');
     if (!data.items.length) {
@@ -1068,6 +1361,11 @@ async function openNew() {
 
 $('btn-new-back').addEventListener('click', () => showView('home'));
 
+$('priv-new-check').addEventListener('change', (e) => {
+  createAsHidden = e.target.checked;
+  toast(createAsHidden ? '该会话将以隐藏状态创建' : '该会话将以正常状态创建');
+});
+
 // ---------------------------------------------------------------------------
 // 会话详情
 // ---------------------------------------------------------------------------
@@ -1075,8 +1373,11 @@ $('btn-new-back').addEventListener('click', () => showView('home'));
 function openChat(sessionId, title) {
   currentSessionId = sessionId;
   $('chat-title-text').textContent = title || '新会话';
-  $('pending-area').innerHTML = '';
+  pendingList = { approvals: [], questions: [] };
+  pendingOutgoing = []; // 切会话时清空本地待发送气泡
+  questionPage = 0;
   $('composer-input').value = '';
+  clearPendingImages();
   hideCmdPopup();
   showView('chat');
   chatMsgs = [];
@@ -1087,12 +1388,13 @@ function openChat(sessionId, title) {
   const cached = readCache(sessionId);
   if (cached && cached.msgs && cached.msgs.length) {
     chatMsgs = cached.msgs.slice();
-    renderMessages(chatMsgs);
+    renderMessages(chatMsgs, { scrollToBottom: true });
     $('chat-sub').textContent = '同步中…';
   } else {
     $('messages').innerHTML = '<div class="empty" style="padding:48px 0">加载中…</div>';
   }
   $('composer-input').focus();
+  justOpenedChat = true; // 首次拉取最新消息后强制滚到底部，避免停留在中间
   chatPoll();
   loadCommands(sessionId);
 }
@@ -1109,21 +1411,43 @@ async function chatPoll() {
     chatHasMore = !!data.hasMore;
     renderMessages(chatMsgs);
     writeCache(currentSessionId, chatMsgs);
-    renderPending(data.pendingApprovals || [], data.pendingQuestions || []);
+    // 问题/审批改为内联进消息流（可滚动），并重置分页到已回答后的有效范围
+    pendingList = { approvals: data.pendingApprovals || [], questions: data.pendingQuestions || [] };
+    if (questionPage >= pendingList.questions.length) questionPage = Math.max(0, pendingList.questions.length - 1);
+    renderPending();
     // 运行状态与输入框快捷按钮：同步一次会话列表（轻量），刷新"停止"按钮与 Agent 预设名
     try {
       const s = await api('/m/sessions');
       lastSessions = s;
     } catch {}
+    // 限速同步最新隧道地址（每 30s 一次）：切到蜂窝等网络时能自动切到隧道，避免断连
+    if (Date.now() - lastTunnelSync > 30000) {
+      lastTunnelSync = Date.now();
+      api('/m/status').then((st) => { if (st.tunnel && st.tunnel.url) syncTunnelBase(st.tunnel.url); }).catch(() => {});
+    }
+    // 同一 WiFi 时自动改用局域网直连（更快），切换成功后重新拉取消息
+    preferLan().then((switched) => { if (switched) chatPoll(); });
     const info = lastSessions.items.find((s) => s.sessionId === currentSessionId);
     sessionRunning = !!(info && info.running);
     if (info && info.agentPreset) updatePresetChip(info.agentPreset);
     updateStopButton();
     const ctx = info && info.context;
-    $('chat-sub').textContent = [
-      sessionRunning ? '● 运行中' : '',
-      ctx && ctx.contextWindow ? `🧠 ${fmtTokens(ctx.usedTokens)} / ${fmtTokens(ctx.contextWindow)} (${Math.min(100, ctx.percent || 0)}%)` : '',
-    ].filter(Boolean).join(' · ');
+    // agent 状态：运行中且已产出文本 → 接收信息中；运行中尚无文本 → 思考中。
+    // 显示在对话流末尾（agentStatus 由 renderMessages 渲染成占位行），不放到菜单栏。
+    let st = '';
+    if (sessionRunning) {
+      const lastAsst = [...chatMsgs].reverse().find((m) => m.kind === 'assistant' && m.text && m.text.trim());
+      st = (lastAsst && lastAsst.text && lastAsst.text.trim()) ? '📥 接收信息中…' : '🤔 思考中…';
+    }
+    if (st !== agentStatus) {
+      agentStatus = st;
+      renderMessages(chatMsgs); // 状态变化时重渲染，把占位行加到对话流末尾
+      renderPending();
+    }
+    const subParts = [];
+    if (sessionRunning) subParts.push('● 运行中');
+    if (ctx && ctx.contextWindow) subParts.push(`🧠 ${fmtTokens(ctx.usedTokens)} / ${fmtTokens(ctx.contextWindow)} (${Math.min(100, ctx.percent || 0)}%)`);
+    $('chat-sub').innerHTML = subParts.join(' · ');
   } catch (e) {
     // 会话可能刚创建；忽略瞬时错误。连续网络错误 → 尝试自动换地址
     if (e && e.code === 'AUTH_EXPIRED') {
@@ -1187,8 +1511,33 @@ function renderMessages(messages, opts = {}) {
     box.innerHTML = '<div class="empty" style="padding:48px 0">还没有消息，发一条试试</div>';
     return;
   }
+  // 先做 pending 去重（渲染真实消息前）：服务端回显同文本用户消息已到 → 立即移除对应 pending 气泡，
+  // 避免同一句话瞬间出现两条。回显不带图片，故把 pending 里的图片记到 echoImgs 补回回显气泡。
+  const consumed = new Set();
+  const echoImgs = {};
+  {
+    const kept = [];
+    for (const o of pendingOutgoing) {
+      let dup = false;
+      if (o.text && o.text.trim()) {
+        const refSeq = o.refSeq || 0;
+        // 只匹配“发送之后新到的回显”（seq > refSeq），避免误匹配到更早的同文本历史
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i];
+          if (m && m.kind === 'user' && String(m.text || '') === String(o.text) && (m.seq || 0) > refSeq && !consumed.has(i)) {
+            consumed.add(i); dup = true;
+            if (o.images && o.images.length) echoImgs[i] = o.images;
+            break;
+          }
+        }
+      }
+      if (!dup) kept.push(o);
+    }
+    pendingOutgoing = kept;
+  }
   let lastToolIdx = -1;
-  for (const m of messages) {
+  for (let mi = 0; mi < messages.length; mi++) {
+    const m = messages[mi];
     if (m.kind === 'system') {
       // 系统消息（dsh 注入的上下文快照/策略变化等）：居中灰色小字，不冒充用户输入
       const div = document.createElement('div');
@@ -1196,9 +1545,12 @@ function renderMessages(messages, opts = {}) {
       div.innerHTML = `<div class="sys-line">${esc(m.text)}</div>`;
       box.appendChild(div);
     } else if (m.kind === 'user') {
+      // 图片专用消息（无文字）在折叠历史里不带图片，会渲染成空泡；跳过（回显气泡已补回图片）
+      if (!m.text || !m.text.trim()) continue;
+      const imgHtml = echoImgs[mi] ? `<div class="out-images">${echoImgs[mi].map((s) => `<img src="${s}" class="ap-thumb" />`).join('')}</div>` : '';
       const div = document.createElement('div');
       div.className = 'msg user';
-      div.innerHTML = `<div class="bubble bubble-md">${renderMarkdown(m.text)}</div>`;
+      div.innerHTML = `<div class="bubble bubble-md">${renderMarkdown(m.text)}${imgHtml}</div>`;
       box.appendChild(div);
     } else if (m.kind === 'assistant') {
       const hasReasoning = !!(m.reasoning && m.reasoning.trim());
@@ -1243,10 +1595,40 @@ function renderMessages(messages, opts = {}) {
       box.appendChild(div);
     }
   }
+  // 本地待发送气泡（发送中转圈 / 已发送 / 失败）：排在消息流末尾。
+  // 注意：去重+图片补回已在上面完成，这里只渲染真正的 pendingOutgoing（kept）。
+  if (pendingOutgoing.length) {
+    for (const o of pendingOutgoing) {
+      const div = document.createElement('div');
+      div.className = 'msg user pending-out';
+      const imgHtml = (o.images && o.images.length)
+        ? `<div class="out-images">${o.images.map((s) => `<img src="${s}" class="ap-thumb" />`).join('')}</div>` : '';
+      const st = o.status === 'sending'
+        ? '<span class="out-status sending"><span class="spin"></span>发送中…</span>'
+        : o.status === 'sent'
+          ? '<span class="out-status sent">✓ 已发送</span>'
+          : `<span class="out-status fail">✗ ${esc(o.err || '发送失败')}</span>`;
+      div.innerHTML = `<div class="bubble bubble-md">${renderMarkdown(o.text)}${imgHtml}</div>${st}`;
+      box.appendChild(div);
+    }
+  }
+  // agent 运行状态：作为对话流末尾的占位行显示（接收信息中 / 思考中），而不是放在菜单栏
+  if (agentStatus) {
+    const div = document.createElement('div');
+    div.className = 'msg agent-status';
+    div.innerHTML = `<div class="agent-line">${esc(agentStatus)}</div>`;
+    box.appendChild(div);
+  }
+  const snapBottom = () => { box.scrollTop = box.scrollHeight; };
   if (opts.keepPosition) {
     box.scrollTop += box.scrollHeight - oldHeight; // 顶部插入更早消息后保持视觉位置
+  } else if (justOpenedChat || opts.scrollToBottom) {
+    // 进入会话/首次加载：强制滚到最新（底部），避免停留在中间；rAF 再断言，防图片/布局未完成
+    snapBottom();
+    requestAnimationFrame(snapBottom);
+    justOpenedChat = false;
   } else if (nearBottom) {
-    box.scrollTop = box.scrollHeight;
+    snapBottom();
   }
   // 斜杠命令执行中（如 /compact 在电脑端压缩上下文）的临时提示
   if (pendingCmd) {
@@ -1298,10 +1680,21 @@ $('messages').addEventListener('scroll', () => {
 });
 
 /** 根据滚动位置显示/隐藏“回到最新”按钮（不在底部时显示）。 */
+/** 把“回到最新”按钮紧贴输入框（含图片按钮/预览框）上方，避免与它们重叠。 */
+function positionScrollBottom() {
+  const btn = $('btn-scroll-bottom');
+  const composer = document.querySelector('.composer');
+  if (btn && composer) {
+    // composer 高度动态（图片预览框/多行文本会增高），让按钮始终悬停在 composer 上沿之上一点。
+    btn.style.bottom = (composer.offsetHeight + 12) + 'px';
+  }
+}
+
 function updateScrollBottom() {
   const box = $('messages');
   const btn = $('btn-scroll-bottom');
   if (!btn) return;
+  positionScrollBottom();
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
   btn.style.display = nearBottom ? 'none' : 'flex';
 }
@@ -1312,13 +1705,99 @@ $('btn-scroll-bottom').addEventListener('click', () => {
   updateScrollBottom();
 });
 
-function renderPending(approvals, questions) {
-  const area = $('pending-area');
-  if (!approvals.length && !questions.length) {
-    area.innerHTML = '';
+// composer 高度变化（图片预览框出现/增删、多行文本增高）时，同步调整“回到最新”按钮贴齐位置
+(function watchComposerHeight() {
+  const composer = document.querySelector('.composer');
+  if (composer && typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => positionScrollBottom());
+    ro.observe(composer);
+  }
+})();
+
+function qDraftOf(id) {
+  if (!qDrafts[id]) qDrafts[id] = { selected: [], custom: '', skipped: false };
+  return qDrafts[id];
+}
+
+/** 从 pendingList.questions 里按 rpcId 找到问题组。 */
+function findQuestionGroup(rpcId) {
+  return (pendingList.questions || []).find((x) => x.questionRpcId === rpcId);
+}
+
+/** 提交整个问题组的答案（与桌面端 submitDrafts 一致：全部子问题一次提交，含 skipped/自定义）。 */
+async function submitQuestionGroup(group) {
+  const groupRpcId = group.questionRpcId;
+  const subs = group.questions || [];
+  let missing = -1;
+  const answers = subs.map((sub, i) => {
+    const d = qDraftOf(sub.id);
+    const custom = (d.custom || '').trim();
+    const done = d.skipped || d.selected.length > 0 || custom !== '';
+    if (!done && missing < 0) missing = i;
+    if (d.skipped) return { id: sub.id, selected: [] };
+    return {
+      id: sub.id,
+      selected: (custom === '' || sub.multiSelect === true) ? d.selected : [],
+      ...(custom === '' ? {} : { custom }),
+    };
+  });
+  if (missing >= 0) {
+    toast('请先完成第 ' + (missing + 1) + ' 题（或点跳过本题）');
     return;
   }
+  try {
+    const res = await api('/m/answer-question', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: currentSessionId, questionRpcId: groupRpcId, answers }),
+    });
+    if (res && res.accepted) {
+      toast('已提交');
+      qDrafts = {}; qDraftGroup = null;
+      pendingList.questions = pendingList.questions.filter((x) => x.questionRpcId !== groupRpcId);
+      if (questionPage >= pendingList.questions.length) questionPage = Math.max(0, pendingList.questions.length - 1);
+      chatPoll();
+    } else {
+      toast('服务端未接受本次回答，请在电脑端处理');
+    }
+  } catch (e) {
+    showErr('提交失败', e, '请在电脑端回答该问题');
+  }
+}
+
+/** 放弃整组问题（对应桌面端“放弃整组问题/取消”）。 */
+async function dismissQuestionGroup(groupRpcId) {
+  try {
+    const res = await api('/m/cancel-question', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: currentSessionId, questionRpcId: groupRpcId }),
+    });
+    if (res && res.accepted) {
+      toast('已放弃该组问题');
+      qDrafts = {}; qDraftGroup = null;
+      pendingList.questions = pendingList.questions.filter((x) => x.questionRpcId !== groupRpcId);
+      if (questionPage >= pendingList.questions.length) questionPage = Math.max(0, pendingList.questions.length - 1);
+      chatPoll();
+    } else {
+      toast('无法放弃，请到电脑端处理');
+    }
+  } catch (e) {
+    showErr('放弃失败', e, '请在电脑端处理该问题');
+  }
+}
+
+function renderPending() {
+  const box = $('messages');
+  if (!box) return;
+  // 问题/审批卡片内联进消息流：先清掉旧卡片，再按当前待回应项追加到对话末尾，
+  // 让它像普通消息一样可滚动，而不是固定在消息列表上方（常驻前台）。
+  box.querySelectorAll('.pending-card').forEach((n) => n.remove());
+  const approvals = pendingList.approvals || [];
+  const questions = pendingList.questions || [];
+  if (!approvals.length && !questions.length) return;
+
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
   let html = '';
+
   for (const a of approvals) {
     html += `
       <div class="pending-card">
@@ -1330,25 +1809,62 @@ function renderPending(approvals, questions) {
         </div>
       </div>`;
   }
-  for (const q of questions) {
-    const q0 = q.questions && q.questions[0];
-    if (!q0) continue;
-    const opts = (q0.options || []).map((o, i) =>
-      `<button class="q-opt" data-question="${esc(q.questionRpcId)}" data-opt="${i}">
-        <span class="qo-label">${esc(o.label)}</span>
-        ${o.description ? '<span class="qo-desc">' + esc(o.description) + '</span>' : ''}
-      </button>`
-    ).join('');
-    html += `
-      <div class="pending-card question-card">
-        <h4>❓ ${esc(q0.question)}</h4>
-        ${q0.description ? '<div class="p-text">' + esc(q0.description) + '</div>' : ''}
-        <div class="q-options">${opts}</div>
-        <div class="p-actions"><button class="p-reject" data-question="${esc(q.questionRpcId)}" data-opt="-1">取消</button></div>
+
+  if (questions.length) {
+    const total = questions.length;
+    const page = Math.min(Math.max(0, questionPage), total - 1);
+    const group = questions[page];
+    const groupRpcId = group.questionRpcId;
+    // 切到新问题组时清空旧组草稿
+    if (qDraftGroup !== groupRpcId) { qDrafts = {}; qDraftGroup = groupRpcId; }
+    const subs = (group.questions || []);
+    const subHtml = subs.map((sub) => {
+      const sid = sub.id;
+      const d = qDraftOf(sid);
+      const multi = sub.multiSelect === true;
+      const opts = (sub.options || []).map((o) => {
+        const sel = d.selected.includes(o.label) ? ' q-opt-sel' : '';
+        return `<button class="q-opt${sel}" data-q="${esc(groupRpcId)}" data-id="${esc(sid)}" data-opt="${esc(o.label)}" data-multi="${multi ? '1' : ''}">
+          <span class="qo-label">${esc(o.label)}</span>
+          ${o.description ? '<span class="qo-desc">' + esc(o.description) + '</span>' : ''}
+        </button>`;
+      }).join('');
+      const cid = 'q-custom-' + String(groupRpcId).replace(/[^\w-]/g, '_') + '-' + String(sid).replace(/[^\w-]/g, '_');
+      return `<div class="q-sub">
+        <h4>❓ ${esc(sub.question)}</h4>
+        ${sub.description ? '<div class="p-text">' + esc(sub.description) + '</div>' : ''}
+        ${sub.options && sub.options.length ? `<div class="q-options">${opts}</div>` : ''}
+        <div class="q-custom">
+          <input type="text" id="${cid}" data-draft-id="${esc(sid)}" class="q-custom-input" placeholder="自定义回答（或补充说明）" />
+          <button class="q-custom-send" data-q="${esc(groupRpcId)}" data-id="${esc(sid)}" data-custom-id="${cid}">✍️ 发送</button>
+        </div>
+        <div class="p-actions"><button class="q-skip" data-q="${esc(groupRpcId)}" data-id="${esc(sid)}">跳过本题</button></div>
       </div>`;
+    }).join('');
+    html += `<div class="pending-card question-card">
+      <h4>🤖 需要你回答${subs.length > 1 ? '（' + subs.length + ' 题）' : ''}</h4>
+      ${subHtml}
+      ${total > 1 ? `<div class="q-pager">
+        <button class="q-prev" data-qprev="1" ${page <= 0 ? 'disabled' : ''}>‹ 上一组</button>
+        <span class="q-page">第 ${page + 1} / ${total} 组</span>
+        <button class="q-next" data-qnext="1" ${page >= total - 1 ? 'disabled' : ''}>下一组 ›</button>
+      </div>` : ''}
+      <div class="p-actions">
+        <button class="q-submit" data-q="${esc(groupRpcId)}">✅ 提交答案</button>
+        <button class="q-dismiss" data-q="${esc(groupRpcId)}">✖ 放弃整组</button>
+      </div>
+    </div>`;
   }
-  area.innerHTML = html;
-  area.querySelectorAll('[data-approval]').forEach((btn) => {
+
+  box.insertAdjacentHTML('beforeend', html);
+
+  // 恢复自定义回答输入框的已输入草稿（组内多题时切换选项/子题重渲染不丢失）
+  box.querySelectorAll('.pending-card .q-custom-input[data-draft-id]').forEach((inp) => {
+    const d = qDrafts[inp.dataset.draftId];
+    if (d && d.custom) inp.value = d.custom;
+  });
+
+  box.querySelectorAll('.pending-card [data-approval]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const approvalId = btn.dataset.approval;
       const outcome = btn.dataset.action === 'allow' ? 'allowed-once' : 'rejected';
@@ -1360,63 +1876,244 @@ function renderPending(approvals, questions) {
         toast(outcome === 'allowed-once' ? '已允许' : '已拒绝');
         chatPoll();
       } catch (e) {
-        toast(e.message);
+        showErr('应答失败', e, '请在电脑端处理该审批');
       }
     });
   });
-  area.querySelectorAll('[data-question]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const questionRpcId = btn.dataset.question;
-      const opt = parseInt(btn.dataset.opt, 10);
-      const q = (questions.find((x) => x.questionRpcId === questionRpcId) || {}).questions || [];
-      const q0 = q[0] || {};
-      const answers = opt >= 0 ? [{ id: (q0.options[opt] || {}).id || String(opt), label: (q0.options[opt] || {}).label }] : [];
-      try {
-        await api('/m/answer-question', {
-          method: 'POST',
-          body: JSON.stringify({ sessionId: currentSessionId, questionRpcId, answers }),
-        });
-        toast('已回答');
-        chatPoll();
-      } catch (e) {
-        toast('手机端暂不能回答该问题，请在电脑上处理');
+  // 选项按钮：单选立即写入草稿；若该组只有 1 个子问题且非多选 → 直接提交（一次点击完成）；
+  // 否则仅打勾，等“提交答案”。
+  box.querySelectorAll('.pending-card [data-q][data-opt]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const group = findQuestionGroup(btn.dataset.q);
+      if (!group) return;
+      const sub = (group.questions || []).find((s) => String(s.id) === String(btn.dataset.id));
+      if (!sub) return;
+      const d = qDraftOf(sub.id);
+      const multi = sub.multiSelect === true;
+      const label = btn.dataset.opt;
+      if (multi) {
+        d.selected = d.selected.includes(label) ? d.selected.filter((x) => x !== label) : [...d.selected, label];
+      } else {
+        d.selected = [label];
+        d.custom = '';
+      }
+      d.skipped = false;
+      if (!multi && (group.questions || []).length === 1) {
+        submitQuestionGroup(group);
+      } else {
+        renderPending();
       }
     });
   });
+  // 自定义回答发送：写入草稿 custom，单选时清空 selected
+  box.querySelectorAll('.pending-card [data-custom-id]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const group = findQuestionGroup(btn.dataset.q);
+      if (!group) return;
+      const sub = (group.questions || []).find((s) => String(s.id) === String(btn.dataset.id));
+      if (!sub) return;
+      const input = $(btn.dataset.customId);
+      const custom = input ? input.value.trim() : '';
+      if (!custom) { toast('请先输入自定义回答'); if (input) input.focus(); return; }
+      const d = qDraftOf(sub.id);
+      d.custom = custom;
+      if (sub.multiSelect !== true) d.selected = [];
+      d.skipped = false;
+      renderPending();
+    });
+  });
+  // 跳过本题：标记该子问题为跳过；单子问题组直接提交整组
+  box.querySelectorAll('.pending-card [data-q][data-id].q-skip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const group = findQuestionGroup(btn.dataset.q);
+      if (!group) return;
+      const sub = (group.questions || []).find((s) => String(s.id) === String(btn.dataset.id));
+      if (!sub) return;
+      const d = qDraftOf(sub.id);
+      d.selected = []; d.custom = ''; d.skipped = true;
+      if ((group.questions || []).length === 1) {
+        submitQuestionGroup(group);
+      } else {
+        renderPending();
+      }
+    });
+  });
+  // 提交答案（整组）
+  box.querySelectorAll('.pending-card [data-q].q-submit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const group = findQuestionGroup(btn.dataset.q);
+      if (group) submitQuestionGroup(group);
+    });
+  });
+  // 放弃整组（对应桌面端取消，取消整个 ask_user_question）
+  box.querySelectorAll('.pending-card [data-q].q-dismiss').forEach((btn) => {
+    btn.addEventListener('click', () => { dismissQuestionGroup(btn.dataset.q); });
+  });
+  // 多组问题分页导航（上一组 / 下一组）
+  box.querySelectorAll('.pending-card [data-qprev]').forEach((btn) => {
+    btn.addEventListener('click', () => { if (questionPage > 0) { questionPage -= 1; renderPending(); } });
+  });
+  box.querySelectorAll('.pending-card [data-qnext]').forEach((btn) => {
+    btn.addEventListener('click', () => { if (questionPage < pendingList.questions.length - 1) { questionPage += 1; renderPending(); } });
+  });
+
+  if (nearBottom) box.scrollTop = box.scrollHeight;
 }
 
 $('btn-back').addEventListener('click', () => { showView('home'); homePoll(); });
 
 function sendMessage() {
   const text = $('composer-input').value.trim();
-  if (!text) return;
+  const images = pendingImages.slice();
+  if (!text && !images.length) return;
   const btn = $('btn-send');
   btn.disabled = true;
-  const payload = { text };
+  const isNewSend = !currentSessionId; // 本次是否新建会话（尚无 sessionId）
+  const payload = { text, images };
   if (currentSessionId) payload.sessionId = currentSessionId;
   else if (currentWsId) payload.workspaceId = currentWsId;
   if (!currentSessionId && currentPreset) payload.agentPreset = currentPreset; // 新建会话指定预设
   // 会话运行中 → 插话发送（steer）：消息插入 agent 正在执行的下一步，优先处理；
   // 空闲 → 普通排队（queue）。
   if (currentSessionId && sessionRunning) payload.mode = 'steer';
+  // 本地“发送中”气泡：立即显示转圈，成功后“已发送”，失败显示“发送失败”
+  const outId = 'out-' + (outSeq++);
+  pendingOutgoing.push({ id: outId, text, images, status: 'sending', refSeq: lastRealUserSeq(chatMsgs) });
+  renderMessages(chatMsgs);
+  $('composer-input').value = '';
+  clearPendingImages();
   api('/m/send', { method: 'POST', body: JSON.stringify(payload) })
     .then((r) => {
-      $('composer-input').value = '';
-      if (!currentSessionId && r.sessionId) {
+      const o = pendingOutgoing.find((x) => x.id === outId);
+      if (o) o.status = 'sent';
+      renderMessages(chatMsgs);
+      if (isNewSend && r.sessionId) {
         currentSessionId = r.sessionId;
         $('chat-title-text').textContent = '新会话';
+        // 新建的会话按需作为"隐藏"会话（隐私模式下默认勾选，新建页可取消）
+        if (createAsHidden) {
+          hiddenSessions.add(r.sessionId);
+          syncHiddenToServer();
+        }
       }
       if (payload.mode === 'steer') toast('⏩ 已插话，agent 将优先处理');
+      // 服务端已回显 → 短暂保留“已发送”后移除本地气泡
+      setTimeout(() => {
+        const idx = pendingOutgoing.findIndex((x) => x.id === outId);
+        if (idx >= 0 && pendingOutgoing[idx].status === 'sent') pendingOutgoing.splice(idx, 1);
+        renderMessages(chatMsgs);
+      }, 1800);
       setTimeout(chatPoll, 300);
     })
     .catch((e) => {
-      toast(e.message);
-      reportError('发送失败', e.message + '\n请求地址：' + base + '/m/send');
+      const o = pendingOutgoing.find((x) => x.id === outId);
+      if (o) { o.status = 'failed'; o.err = e && e.message ? e.message : '发送失败'; }
+      // 还原输入内容与图片，方便直接重试
+      $('composer-input').value = text;
+      if (images.length) {
+        pendingImages = images.slice();
+        renderAttachPreview();
+      }
+      renderMessages(chatMsgs);
+      showErr('发送失败', e);
     })
     .finally(() => { btn.disabled = false; });
 }
 
 $('btn-send').addEventListener('click', sendMessage);
+
+/** 最近一条真实用户消息的 seq（用于判断回显是否“晚于本次发送”，避免误匹配到更早的同文本历史）。 */
+function lastRealUserSeq(msgs) {
+  for (let i = (msgs || []).length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m && m.kind === 'user' && m.seq !== undefined) return m.seq;
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// 发送图片（vision 输入）：选图 → 压缩成 base64 data URL → 预览 → 随消息发送
+// ---------------------------------------------------------------------------
+
+/** 渲染待发送图片预览（缩略图 + 移除按钮）。 */
+function renderAttachPreview() {
+  const box = $('attach-preview');
+  box.style.display = pendingImages.length ? 'flex' : 'none';
+  box.innerHTML = pendingImages.map((img, i) => `
+    <div class="ap-item">
+      <img src="${img}" class="ap-thumb" />
+      <button class="ap-remove" data-i="${i}" title="移除">×</button>
+    </div>`).join('');
+  box.querySelectorAll('[data-i]').forEach((b) => {
+    b.addEventListener('click', () => {
+      pendingImages.splice(Number(b.dataset.i), 1);
+      renderAttachPreview();
+    });
+  });
+}
+
+function clearPendingImages() {
+  pendingImages = [];
+  renderAttachPreview();
+}
+
+/** 读取图片文件，统一转成 JPEG data URL（dsh 的 session.prompt 只接受
+ * image/png|jpeg|webp|gif，且手机端相册常见 HEIC 等格式必须归一化到 jpeg 才合法）。
+ * 先按宽度缩到合理范围，再按字节上限循环缩放。 */
+function imgFileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('读取图片失败'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('图片解码失败'));
+      img.onload = () => {
+        let { width, height } = img;
+        const maxSide = 1600;
+        if (Math.max(width, height) > maxSide) {
+          const ratio = maxSide / Math.max(width, height);
+          height = Math.round(height * ratio);
+          width = Math.round(width * ratio);
+        }
+        // 一律重绘成 JPEG；超限再循环缩小。
+        let scale = 1, out = null;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(width * scale));
+          canvas.height = Math.max(1, Math.round(height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          out = canvas.toDataURL('image/jpeg', 0.85);
+          if (out.length * 3 / 4 <= MAX_IMG_BYTES) break;
+          scale *= 0.7;
+        }
+        resolve(out || '');
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+async function onAttachSelected(e) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  for (const file of files) {
+    if (pendingImages.length >= MAX_ATTACH) { toast('最多附 ' + MAX_ATTACH + ' 张图'); break; }
+    try {
+      const url = await imgFileToDataUrl(file);
+      pendingImages.push(url);
+    } catch (err) {
+      toast(err.message || '图片处理失败');
+    }
+  }
+  renderAttachPreview();
+}
+
+$('chip-attach').addEventListener('click', () => $('attach-input').click());
+$('attach-input').addEventListener('change', onAttachSelected);
+
 $('composer-input').addEventListener('keydown', (e) => {
   // Enter 插入换行（不发送）；Ctrl/Cmd+Enter 发送。
   // 注：Android 软键盘“换行”键也会触发 keydown Enter，不应被当成发送。
@@ -1523,8 +2220,10 @@ async function loadCommands(sessionId) {
   try {
     const data = await api(`/m/commands?sessionId=${encodeURIComponent(sessionId)}`);
     cmdCache[sessionId] = Array.isArray(data.items) ? data.items : [];
-  } catch {
+    cmdErr[sessionId] = null;
+  } catch (e) {
     cmdCache[sessionId] = []; // 拉取失败时只有本地命令可用
+    cmdErr[sessionId] = e; // 保留错误，命令菜单里点击可弹窗复制具体原因（如 404）
   } finally {
     cmdLoading[sessionId] = false;
   }
@@ -1543,13 +2242,30 @@ function updateCmdPopup() {
   const items = CMD_ITEMS
     .concat(server.map((c) => ({ key: '/' + c.name, label: '/' + c.name, desc: c.description || '', action: 'run', line: '/' + c.name })))
     .filter((c) => !q || c.key.slice(1).startsWith(q));
-  if (!items.length) { hideCmdPopup(); return; }
-  box.innerHTML = items.map((c, i) => `
+  // 服务端命令列表若加载失败（如 /m/commands 404），在菜单顶部放一个可点开复制的错误项，
+  // 让用户能看到、复制具体原因，而不是只显示本地 /cancel。
+  const cmdError = cmdErr[currentSessionId];
+  let errHtml = '';
+  if (cmdError && (items.length === 0 || !q)) {
+    errHtml = `<button class="cmd-item cmd-err" data-err="1">
+      <span class="ci-label">⚠ 服务端命令加载失败</span>
+      <span class="ci-desc">点我查看/复制具体原因</span>
+    </button>`;
+  }
+  if (!items.length && !errHtml) { hideCmdPopup(); return; }
+  box.innerHTML = errHtml + items.map((c, i) => `
     <button class="cmd-item" data-i="${i}">
       <span class="ci-label">${c.key}</span>
       <span class="ci-desc">${esc(c.desc)}</span>
     </button>`).join('');
   box.style.display = 'block';
+  if (cmdError) {
+    const eb = box.querySelector('[data-err]');
+    if (eb) eb.addEventListener('click', () => {
+      hideCmdPopup();
+      showErr('服务端命令加载失败', cmdError, '请把以上内容发给我排查');
+    });
+  }
   box.querySelectorAll('[data-i]').forEach((b) => {
     b.addEventListener('click', () => {
       hideCmdPopup();
@@ -1591,13 +2307,19 @@ async function executeSlash(line) {
   const label = /^\/compact$/i.test(cmdName) ? '正在压缩上下文' : `正在执行 ${cmdName}`;
   showPendingCmd(label);
   try {
-    const r = await api('/m/command', { method: 'POST', body: JSON.stringify({ sessionId: currentSessionId, line }) });
+    const r = await api('/m/command', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: currentSessionId, line }),
+      // /compact 等慢命令：放宽超时到 3 分钟，且禁止"超时自动重发"（重发会执行两遍、第二次撞 busy）
+      _timeoutMs: 180000,
+      _noRetry: true
+    });
     clearPendingCmd();
     if (r.text) toast(r.text.slice(0, 120));
     setTimeout(chatPoll, 300);
   } catch (e) {
     clearPendingCmd();
-    toast(e.message);
+    showErr('执行命令失败', e, '命令：' + line);
   }
 }
 
@@ -1606,7 +2328,7 @@ function sendRaw(text) {
   if (!currentSessionId) return;
   api('/m/send', { method: 'POST', body: JSON.stringify({ sessionId: currentSessionId, text }) })
     .then(() => { setTimeout(chatPoll, 300); })
-    .catch((e) => toast(e.message));
+    .catch((e) => showErr('发送失败', e, '内容：' + text));
 }
 
 async function cancelChat() {
@@ -1698,9 +2420,9 @@ async function openPermissionPicker(sessionId) {
         } else if (currentView === 'settings') {
           settingsPoll();
         }
-      } catch (e) { toast(e.message); }
+      } catch (e) { showErr('切换权限失败', e, '目标权限：' + (PERM_LABELS[opt.id] || opt.id)); }
     });
-  } catch (e) { toast(e.message); }
+  } catch (e) { showErr('加载权限失败', e); }
 }
 
 // --- Agent 预设（模型与推理等级） ---
@@ -1728,21 +2450,76 @@ async function openPresetPicker(sessionId, onDone) {
           updatePresetChip(opt.id);
         }
         if (onDone) onDone();
-      } catch (e) { toast(e.message); }
+      } catch (e) { showErr('切换预设失败', e, '目标预设：' + opt.label); }
     });
-  } catch (e) { toast(e.message); }
+  } catch (e) { showErr('加载预设失败', e); }
+}
+
+// --- 模型选择（当前会话单独切换 LLM 模型，与桌面端 /model 同一数据源） ---
+async function openModelPicker(sessionId) {
+  if (!sessionId) { toast('请先打开一个会话'); return; }
+  try {
+    const data = await api('/m/models?sessionId=' + encodeURIComponent(sessionId));
+    const groups = Array.isArray(data.groups) ? data.groups : [];
+    if (!groups.length) { toast('电脑上没有可用的模型'); return; }
+    const cur = data.current || {};
+    // 平铺成选项：group.name 作为分组前缀（若有），模型名用 name（dsh 返回 name 而非 label）
+    const opts = [];
+    for (const g of groups) {
+      const gLabel = (g.label || g.name) ? String(g.label || g.name) : '';
+      const gProvider = g.id || '';
+      for (const m of (g.models || [])) {
+        const isCur = cur.model === m.id || cur.id === m.id;
+        opts.push({
+          id: m.id,
+          label: (gLabel ? gLabel + ' · ' : '') + (m.label || m.name || m.id || '').trim(),
+          desc: (m.description || '') + (m.reasoning && typeof m.reasoning === 'object' ? '' : ''),
+          selected: isCur,
+          provider: gProvider,
+          model: m,
+        });
+      }
+    }
+    if (!opts.length) { toast('电脑上没有可用的模型'); return; }
+    openSheet('模型（当前会话）', opts, async (opt) => {
+      try {
+        // select-model 需要 provider（group.id）+ model（model.id），与桌面端 /model 一致。
+        const m = opt.model || {};
+        const selection = {
+          provider: opt.provider || '',
+          model: m.id || m.model || '',
+          ...(m.reasoning && m.reasoning.defaultEffort !== undefined) ? { reasoningEffort: m.reasoning.defaultEffort } : {},
+        };
+        await api('/m/select-model', { method: 'POST', body: JSON.stringify({ sessionId, selection }) });
+        toast('已切换模型为「' + opt.label + '」');
+        setTimeout(chatPoll, 400);
+      } catch (e) {
+        showErr('切换模型失败', e, '目标模型：' + opt.label);
+      }
+    });
+  } catch (e) { showErr('加载模型失败', e); }
 }
 
 // --- 会话操作菜单（⋮） ---
 $('btn-chat-settings').addEventListener('click', () => {
   const opts = [
     { id: 'permission', label: '权限模式', desc: '当前会话的电脑文件访问级别（含完全访问）' },
-    { id: 'preset', label: 'Agent 预设', desc: '模型与推理等级（仅新会话可切换）' },
+    { id: 'preset', label: 'Agent 预设', desc: '模型与推理等级组合（仅新会话可切换）' },
   ];
-  if (currentSessionId) opts.push({ id: 'cancel', label: '停止当前会话', desc: '取消正在运行的任务' });
+  if (currentSessionId) {
+    opts.push({ id: 'model', label: '模型', desc: '当前会话单独切换 LLM 模型' });
+    opts.push({
+      id: 'hide',
+      label: isHidden(currentSessionId) ? '取消隐藏（隐私）' : '隐藏此会话（隐私）',
+      desc: isHidden(currentSessionId) ? '恢复在会话列表中显示' : '从列表隐藏，进入隐私模式可见',
+    });
+    opts.push({ id: 'cancel', label: '停止当前会话', desc: '取消正在运行的任务' });
+  }
   openSheet('会话操作', opts, (opt) => {
     if (opt.id === 'permission') openPermissionPicker(currentSessionId);
     else if (opt.id === 'preset') openPresetPicker(currentSessionId);
+    else if (opt.id === 'model') openModelPicker(currentSessionId);
+    else if (opt.id === 'hide') toggleHideSession(currentSessionId);
     else if (opt.id === 'cancel') cancelChat();
   });
 });
@@ -1784,6 +2561,7 @@ async function settingsPoll() {
   try {
     const me = await api('/m/me');
     const st = await api('/m/status');
+    if (st.tunnel && st.tunnel.url) syncTunnelBase(st.tunnel.url);
     $('device-card').innerHTML = `
       <h3>此设备</h3>
       <div class="card-row"><span class="device-name">${esc(me.device.name)}</span>
@@ -1795,10 +2573,11 @@ async function settingsPoll() {
     } catch { $('perm-current').textContent = '—'; }
     const rows = [];
     if (st.activeDevice) rows.push(`<div class="card-row"><span class="muted">当前控制设备</span><span>${esc(st.activeDevice.name)}</span></div>`);
+    rows.push(`<div class="card-row"><span class="muted">连接方式</span><span class="badge run">${esc(connLabel(base))}</span></div>`);
     rows.push(`<div class="card-row"><span class="muted">连接地址</span><span style="font-size:11px;color:#9fd0ff;word-break:break-all">${esc(base || '—')}</span></div>`);
     rows.push(`<div class="card-row"><span class="muted">已保存地址</span><span style="font-size:11px;word-break:break-all">${esc(bases.map((b) => b.url).join('、') || '—')}</span></div>`);
     rows.push(`<div class="card-row"><span class="muted">电脑服务</span><span class="${st.dshUp ? 'badge run' : 'badge pending'}">${st.dshUp ? '运行中' : '未运行'}</span></div>`);
-    if (st.tunnel && st.tunnel.url) rows.push(`<div class="card-row"><span class="muted">远程地址</span><span style="font-size:11px;color:#9fd0ff;word-break:break-all">${esc(st.tunnel.url)}</span></div>`);
+    if (st.tunnel && st.tunnel.url) rows.push(`<div class="card-row"><span class="muted">远程兜底（隧道）</span><span style="font-size:11px;color:#9fd0ff;word-break:break-all">${esc(st.tunnel.url)}</span></div>`);
     rows.push(`<div class="card-row"><span class="muted">已配对设备</span><span>${st.deviceCount}</span></div>`);
     $('server-card').innerHTML = `<h3>电脑状态</h3>${rows.join('')}`;
   } catch (e) {
@@ -1837,5 +2616,6 @@ $('btn-disconnect').addEventListener('click', () => {
 
 window.addEventListener('load', () => {
   initTheme(); // 先应用主题，避免浅色/深色切换后闪烁
+  loadPrivacy(); // 恢复隐私隐藏列表与模式（顶部提示条随之显示）
   boot().catch((err) => showFatalError('启动失败：' + (err && err.message ? err.message : err)));
 });

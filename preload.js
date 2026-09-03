@@ -212,3 +212,108 @@ window.addEventListener('dsh-open-session-dir', (event) => {
   const path = event && event.detail && typeof event.detail.path === 'string' ? event.detail.path : '';
   if (path) ipcRenderer.send('open-session-dir', path);
 });
+
+// ---------------------------------------------------------------------------
+// 5. 隐私模式（桌面端）— 基于 dsh 原生"隐藏会话"状态
+//    · 隐藏/取消隐藏由 dsh 会话行菜单「隐藏会话（隐私）/取消隐藏」操作
+//      （workspace.hideSession/unhideSession → host/hidden-sessions-changed →
+//      useWorkspaces.hiddenSessionIds → sessionVisible 数据层过滤）。
+//    · 进入隐私模式：10 秒内点侧边栏顶部"鲸鱼 logo"(brandMark) 5 次。
+//      进入后调用 window.__setPrivacyMode(true)：sessionVisible 放行隐藏会话（显示全部）。
+//    · 退出：顶部红色横幅「一键退出」→ window.__setPrivacyMode(false)，并自动跳到最近的对话。
+//    · 隐藏会话在普通模式下不渲染（数据层过滤，不闪、不留空工作区）。
+//    · 远程共享：隐藏名单存于主进程 privacy.json（手机 /m/hidden 同源），主进程负责桥接 host。
+// ---------------------------------------------------------------------------
+
+const PRIV_BANNER_ID = 'dsh-priv-banner';
+// 当前隐私模式（本机运行时内存）。初始普通模式。
+let privActive = false;
+
+function privInjectStyle() {
+  if (document.getElementById('dsh-privacy-style')) return;
+  const tag = document.createElement('style');
+  tag.id = 'dsh-privacy-style';
+  tag.textContent = [
+    '#' + PRIV_BANNER_ID + '{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:100000;display:none;align-items:center;gap:10px;padding:9px 16px;border-radius:10px;background:rgba(229,72,77,.2);border:1px solid rgba(229,72,77,.6);color:#f2a9ac;font-size:13px;font-weight:600;font-family:inherit;-webkit-user-select:none;user-select:none;box-shadow:0 6px 22px rgba(0,0,0,.35)}',
+    '#' + PRIV_BANNER_ID + ' .dsh-priv-banner-hint{flex:none;font-weight:400;color:rgba(242,169,172,.9)}',
+    '#' + PRIV_BANNER_ID + ' .dsh-priv-banner-exit{flex:none;margin-left:10px;padding:5px 12px;border-radius:8px;border:1px solid rgba(229,72,77,.65);background:transparent;color:#f2a9ac;font-size:12px;cursor:pointer;font-family:inherit}',
+    '#' + PRIV_BANNER_ID + ' .dsh-priv-banner-exit:hover{background:rgba(229,72,77,.3)}',
+    '[data-session-id].dsh-priv-hidden{background:rgba(229,72,77,.10)!important;outline:1px dashed rgba(229,72,77,.5)!important}'
+  ].join('\n');
+  document.head.appendChild(tag);
+}
+
+function privGoToRecent() {
+  try {
+    const rows = document.querySelectorAll('[data-session-id]');
+    let target = null;
+    for (const r of rows) {
+      const txt = (r.textContent || '').replace(/\s+/g, '').trim().toLowerCase();
+      if (txt === '新会话' || txt === 'newsession' || txt.indexOf('新会话') === 0) continue;
+      target = r; break;
+    }
+    if (target) target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  } catch (e) {}
+}
+
+function privSetMode(v) {
+  privActive = !!v;
+  privSyncBanner();
+  if (typeof window.__setPrivacyMode === 'function') {
+    try { window.__setPrivacyMode(privActive); } catch (e) {}
+  }
+  // contextIsolation 下 preload 与页面 window 隔离，改用共享 DOM 事件通知页面切换隐私。
+  try {
+    document.dispatchEvent(new CustomEvent('dsh-privacy-mode', { detail: privActive }));
+  } catch (e) {}
+  // 退出隐私模式 → 稍候（等前端重渲染过滤）自动跳到最近的对话
+  if (!privActive) setTimeout(privGoToRecent, 120);
+}
+
+function privSyncBanner() {
+  let banner = document.getElementById(PRIV_BANNER_ID);
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = PRIV_BANNER_ID;
+    banner.innerHTML =
+      '<span>🔒 隐私模式</span>' +
+      '<span class="dsh-priv-banner-hint">正在显示全部会话</span>' +
+      '<button type="button" class="dsh-priv-banner-exit">一键退出</button>';
+    banner.querySelector('.dsh-priv-banner-exit').addEventListener('click', () => privSetMode(false));
+    document.body.appendChild(banner);
+  }
+  banner.style.display = privActive ? 'flex' : 'none';
+}
+
+// 入口：仅认鲸鱼 logo(brandMark)。10 秒内点 5 次进入隐私模式。
+function privIsBrand(e) {
+  return !!(e.target && e.target.closest && e.target.closest('[class*="brandMark"]'));
+}
+let privTaps = 0;
+let privFirstTap = 0;
+function privBaseEntry() {
+  if (document.body._privEntry) return;
+  document.body._privEntry = true;
+  document.body.addEventListener('click', (e) => {
+    if (!privIsBrand(e)) return;
+    const now = Date.now();
+    if (!privFirstTap || now - privFirstTap > 10000) { privFirstTap = now; privTaps = 0; }
+    privTaps += 1;
+    if (privTaps >= 5) { privTaps = 0; privFirstTap = 0; privSetMode(true); }
+  });
+}
+
+function privInit() {
+  try {
+    if (!document.body) return;
+    privInjectStyle();
+    privSyncBanner();
+    privBaseEntry();
+  } catch (e) {}
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', privInit);
+} else {
+  privInit();
+}
